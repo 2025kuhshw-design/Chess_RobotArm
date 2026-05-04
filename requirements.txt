@@ -1,0 +1,11 @@
+pybullet
+stable-baselines3[extra]
+chess==1.10.0
+stockfish
+opencv-python
+pyserial
+numpy
+scipy
+torch
+tensorboard
+sb3-contrib

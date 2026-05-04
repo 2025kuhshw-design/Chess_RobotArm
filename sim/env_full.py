@@ -1,0 +1,95 @@
+"""
+2단계 PyBullet RL 환경 (robot_full.urdf 사용)
+env_simple.py 상속 + Domain Randomization 확대
+"""
+
+import os
+import numpy as np
+from sim.env_simple import ChessArmEnvSimple
+
+# ─────────────────────────────────────────
+# 하이퍼파라미터 / 상수 (1단계보다 확대)
+# ─────────────────────────────────────────
+URDF_FULL_PATH  = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_full.urdf")
+
+NOISE_LOW_FULL    = -0.08
+NOISE_HIGH_FULL   =  0.08
+DELAY_LOW_FULL    =  0.0
+DELAY_HIGH_FULL   =  0.05
+FRICTION_LOW_FULL =  0.01
+FRICTION_HIGH_FULL=  0.30
+MASS_VARIATION    =  0.20   # ±20%
+
+BASE_MASSES = [0.3, 0.2, 0.1]   # 링크 기본 질량 (kg)
+
+
+class ChessArmEnvFull(ChessArmEnvSimple):
+    """
+    1단계 환경 상속 → URDF + Domain Randomization 범위만 교체.
+    """
+
+    def __init__(self, render_mode=None, urdf_path=None):
+        full_path = urdf_path or os.path.abspath(URDF_FULL_PATH)
+        super().__init__(render_mode=render_mode, urdf_path=full_path)
+
+    # ─────────────────────────────────────────
+    # Domain Randomization: 에피소드마다 질량 변경
+    # ─────────────────────────────────────────
+    def _randomize_link_masses(self):
+        p = self._p
+        if self._robot_id is None:
+            return
+        joint_indices = [i for i in range(self._n_joints)
+                         if p.getJointInfo(self._robot_id, i)[2] == p.JOINT_REVOLUTE]
+        for i, link_idx in enumerate(joint_indices[:3]):
+            base_mass = BASE_MASSES[i]
+            variation = np.random.uniform(-MASS_VARIATION, MASS_VARIATION)
+            new_mass  = base_mass * (1.0 + variation)
+            # PyBullet은 changeDynamics로 질량 변경
+            p.changeDynamics(self._robot_id, link_idx, mass=new_mass)
+
+    # ─────────────────────────────────────────
+    # reset: DR 파라미터 확대 적용
+    # ─────────────────────────────────────────
+    def reset(self, seed=None, options=None):
+        # 부모 reset 호출 전에 DR 범위 덮어쓰기
+        obs, info = super().reset(seed=seed, options=options)
+
+        # 확대된 DR 파라미터로 재설정
+        self._noise_scale = np.random.uniform(abs(NOISE_LOW_FULL), NOISE_HIGH_FULL)
+        self._friction    = np.random.uniform(FRICTION_LOW_FULL, FRICTION_HIGH_FULL)
+
+        # 링크 질량 랜덤화
+        self._randomize_link_masses()
+
+        return obs, info
+
+    # ─────────────────────────────────────────
+    # 실제 관절각 시뮬레이션 (확대된 노이즈)
+    # ─────────────────────────────────────────
+    def _simulate_real_joints(self, q_cmd):
+        noise    = np.random.uniform(NOISE_LOW_FULL, NOISE_HIGH_FULL, size=3)
+        friction = np.random.uniform(0, self._friction, size=3) * np.sign(q_cmd)
+        q_real   = q_cmd + noise - friction
+        return q_real.astype(np.float32)
+
+
+# ─────────────────────────────────────────
+# 단독 실행: 환경 동작 확인
+# ─────────────────────────────────────────
+if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+    env = ChessArmEnvFull()
+    obs, _ = env.reset()
+    print(f"[env_full] obs shape: {obs.shape}")
+    print(f"초기 관측: {np.round(obs, 3)}")
+
+    for step in range(5):
+        action = env.action_space.sample()
+        obs, reward, terminated, truncated, info = env.step(action)
+        print(f"  step {step+1}: dist={info['dist_cm']:.2f}cm  reward={reward:.2f}")
+
+    env.close()
+    print("✅ env_full 동작 확인 완료")
