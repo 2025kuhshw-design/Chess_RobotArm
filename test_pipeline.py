@@ -205,7 +205,10 @@ def test_rl_model():
                 x, y, z = chess_square_to_xyz(col, row)
                 try:
                     q1, q2, q3 = inverse_kinematics(x, y, z)
-                    obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z], dtype=np.float32)
+                    from utils.lagrange import required_torque
+                    tau = np.clip(required_torque([q1,q2,q3],[0,0,0],[0.1,0.1,0.1]), -3.0, 3.0)
+                    obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
+                                    tau[0], tau[1], tau[2]], dtype=np.float32)
                     action, _ = model.predict(obs, deterministic=True)
                     if action is not None and len(action) == 3:
                         success += 1

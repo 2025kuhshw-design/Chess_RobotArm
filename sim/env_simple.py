@@ -37,7 +37,10 @@ PIECE_Z        = 0.015
 
 class ChessArmEnvSimple(gym.Env):
     """
-    상태(9): [q1_ik, q2_ik, q3_ik, q1_real, q2_real, q3_real, tx, ty, tz]
+    상태(12): [q1_ik, q2_ik, q3_ik,       -- 역기구학 이론 관절각
+               q1_real, q2_real, q3_real,   -- 실제(노이즈 포함) 관절각
+               tx, ty, tz,                  -- 목표 끝단 위치
+               tau1, tau2, tau3]            -- 라그랑주 필요 토크 (N·m)
     행동(3): 각 관절 보정 델타 [-0.2, 0.2] rad
     """
 
@@ -48,9 +51,11 @@ class ChessArmEnvSimple(gym.Env):
         self.render_mode = render_mode
         self.urdf_path   = urdf_path or os.path.abspath(URDF_PATH)
 
+        # 토크 범위: MG996R 최대 1.27 N·m 기준으로 ±2배 여유
+        TAU_LIMIT = 3.0
         self.observation_space = spaces.Box(
-            low  = np.array([-math.pi]*3 + [-math.pi]*3 + [-1.0, -1.0, 0.0], dtype=np.float32),
-            high = np.array([ math.pi]*3 + [ math.pi]*3 + [ 1.0,  1.0, 1.0], dtype=np.float32),
+            low  = np.array([-math.pi]*3 + [-math.pi]*3 + [-1.0, -1.0, 0.0] + [-TAU_LIMIT]*3, dtype=np.float32),
+            high = np.array([ math.pi]*3 + [ math.pi]*3 + [ 1.0,  1.0, 1.0] + [ TAU_LIMIT]*3, dtype=np.float32),
         )
         self.action_space = spaces.Box(
             low  = np.full(3, -DELTA_LIMIT, dtype=np.float32),
@@ -62,6 +67,7 @@ class ChessArmEnvSimple(gym.Env):
         self._target_xyz      = None
         self._q_ik            = np.zeros(3)
         self._q_real          = np.zeros(3)
+        self._tau             = np.zeros(3)   # 라그랑주 토크
         self._step_count      = 0
 
         # 노이즈 파라미터 (에피소드마다 갱신)
@@ -172,6 +178,7 @@ class ChessArmEnvSimple(gym.Env):
         self._target_xyz  = self._random_target()
         self._q_ik        = self._compute_ik(self._target_xyz)
         self._q_real      = self._simulate_real_joints(self._q_ik)
+        self._tau         = self._compute_tau(self._q_real)
         self._step_count  = 0
 
         self._set_joint_angles(self._q_real)
@@ -179,8 +186,21 @@ class ChessArmEnvSimple(gym.Env):
         obs = self._get_obs()
         return obs, {}
 
+    # ─────────────────────────────────────────
+    # 라그랑주 토크 계산
+    # ─────────────────────────────────────────
+    def _compute_tau(self, q_real) -> np.ndarray:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        from utils.lagrange import required_torque
+        try:
+            tau = required_torque(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
+            return np.clip(tau, -3.0, 3.0).astype(np.float32)
+        except Exception:
+            return np.zeros(3, dtype=np.float32)
+
     def _get_obs(self):
-        return np.concatenate([self._q_ik, self._q_real, self._target_xyz]).astype(np.float32)
+        return np.concatenate([self._q_ik, self._q_real, self._target_xyz, self._tau]).astype(np.float32)
 
     # ─────────────────────────────────────────
     # step
@@ -194,6 +214,7 @@ class ChessArmEnvSimple(gym.Env):
         dist    = float(np.linalg.norm(ee_pos - self._target_xyz))
 
         self._q_real = q_real
+        self._tau    = self._compute_tau(q_real)   # 라그랑주 토크 갱신
         self._set_joint_angles(q_real)
         self._step_count += 1
 
@@ -204,13 +225,14 @@ class ChessArmEnvSimple(gym.Env):
         if dist < REACH_FINE:
             reward += 200.0
 
-        # 토크 한계 페널티
+        # 라그랑주 토크 한계 페널티
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from utils.lagrange import check_torque_feasibility
-        feasible, _, _ = check_torque_feasibility(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
-        if not feasible:
-            reward -= 30.0
+        from utils.lagrange import SERVO_LIMIT
+        if np.any(np.abs(self._tau) > SERVO_LIMIT):
+            # 초과 비율에 비례한 페널티 (단순 -30보다 정교함)
+            excess = np.sum(np.maximum(np.abs(self._tau) - SERVO_LIMIT, 0))
+            reward -= 30.0 + excess * 5.0
 
         terminated = dist < REACH_FINE
         truncated  = self._step_count >= MAX_STEPS

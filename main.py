@@ -114,10 +114,14 @@ def run_game(args, arm, detector, rl_model):
             if not feasible:
                 print(f"  [경고] 토크 한계 초과: {np.round(tau, 3)} N·m")
 
-            # RL 보정
+            # RL 보정 (observation 12차원: IK각 + 실제각 + 목표xyz + 라그랑주토크)
             correction = None
             if rl_model is not None:
-                obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z], dtype=np.float32)
+                from utils.lagrange import required_torque
+                tau = required_torque([q1,q2,q3], [0,0,0], [0.1,0.1,0.1])
+                tau_clipped = np.clip(tau, -3.0, 3.0)
+                obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
+                                tau_clipped[0], tau_clipped[1], tau_clipped[2]], dtype=np.float32)
                 delta, _ = rl_model.predict(obs, deterministic=True)
                 correction = delta
                 print(f"  [RL 보정] Δq = {np.round(delta, 4)}")
