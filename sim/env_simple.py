@@ -180,6 +180,7 @@ class ChessArmEnvSimple(gym.Env):
         self._q_real      = self._simulate_real_joints(self._q_ik)
         self._tau         = self._compute_tau(self._q_real)
         self._step_count  = 0
+        self._prev_dist   = float("inf")
 
         self._set_joint_angles(self._q_real)
 
@@ -218,19 +219,29 @@ class ChessArmEnvSimple(gym.Env):
         self._set_joint_angles(q_real)
         self._step_count += 1
 
-        # 보상 계산
-        reward = -dist * 10.0
-        if dist < REACH_GOOD:
+        # 보상 계산 (거리 기반 연속 보상 + 단계별 보너스)
+        reward = -dist * 20.0               # 거리 페널티 강화
+
+        if dist < 0.10:                     # 10cm 이내
+            reward += 10.0
+        if dist < 0.05:                     # 5cm 이내
+            reward += 30.0
+        if dist < REACH_GOOD:               # 2cm 이내
             reward += 100.0
-        if dist < REACH_FINE:
+        if dist < REACH_FINE:               # 0.5cm 이내
             reward += 200.0
+
+        # 이전 스텝보다 가까워졌으면 추가 보상 (방향 학습 유도)
+        prev_dist = getattr(self, "_prev_dist", dist)
+        if dist < prev_dist:
+            reward += 5.0
+        self._prev_dist = dist
 
         # 라그랑주 토크 한계 페널티
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from utils.lagrange import SERVO_LIMIT
         if np.any(np.abs(self._tau) > SERVO_LIMIT):
-            # 초과 비율에 비례한 페널티 (단순 -30보다 정교함)
             excess = np.sum(np.maximum(np.abs(self._tau) - SERVO_LIMIT, 0))
             reward -= 30.0 + excess * 5.0
 
