@@ -13,7 +13,7 @@ from gymnasium import spaces
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
 URDF_PATH    = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_simple.urdf")
-L1, L2, L3  = 0.28, 0.22, 0.08
+L1, L2, L3  = 0.140, 0.155, 0.075   # 실측값 (m)
 MAX_STEPS    = 150
 DELTA_LIMIT  = 0.2        # 보정 델타 최대값 (rad)
 REACH_GOOD   = 0.02       # 도달 인정 거리 (m) → +100
@@ -29,8 +29,8 @@ FRICTION_LOW =  0.01
 FRICTION_HIGH=  0.15
 
 # 체스판 설정 (랜덤 목표 생성용)
-BOARD_ORIGIN_X = 0.12
-BOARD_ORIGIN_Y = -0.112
+BOARD_ORIGIN_X = 0.015
+BOARD_ORIGIN_Y = -0.115
 CELL_SIZE      = 0.028
 PIECE_Z        = 0.015
 
