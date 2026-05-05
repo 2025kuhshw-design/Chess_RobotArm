@@ -33,6 +33,15 @@ class ChessArmEnvFull(ChessArmEnvSimple):
         super().__init__(render_mode=render_mode, urdf_path=full_path)
 
     # ─────────────────────────────────────────
+    # DR 파라미터 오버라이드 (reset() 호출 전에 실행됨)
+    # 링크 질량 랜덤화 포함
+    # ─────────────────────────────────────────
+    def _set_dr_params(self):
+        self._noise_scale = np.random.uniform(abs(NOISE_LOW_FULL), NOISE_HIGH_FULL)
+        self._friction    = np.random.uniform(FRICTION_LOW_FULL, FRICTION_HIGH_FULL)
+        self._randomize_link_masses()
+
+    # ─────────────────────────────────────────
     # Domain Randomization: 에피소드마다 질량 변경
     # ─────────────────────────────────────────
     def _randomize_link_masses(self):
@@ -45,30 +54,13 @@ class ChessArmEnvFull(ChessArmEnvSimple):
             base_mass = BASE_MASSES[i]
             variation = np.random.uniform(-MASS_VARIATION, MASS_VARIATION)
             new_mass  = base_mass * (1.0 + variation)
-            # PyBullet은 changeDynamics로 질량 변경
             p.changeDynamics(self._robot_id, link_idx, mass=new_mass)
-
-    # ─────────────────────────────────────────
-    # reset: DR 파라미터 확대 적용
-    # ─────────────────────────────────────────
-    def reset(self, seed=None, options=None):
-        # 부모 reset 호출 전에 DR 범위 덮어쓰기
-        obs, info = super().reset(seed=seed, options=options)
-
-        # 확대된 DR 파라미터로 재설정
-        self._noise_scale = np.random.uniform(abs(NOISE_LOW_FULL), NOISE_HIGH_FULL)
-        self._friction    = np.random.uniform(FRICTION_LOW_FULL, FRICTION_HIGH_FULL)
-
-        # 링크 질량 랜덤화
-        self._randomize_link_masses()
-
-        return obs, info
 
     # ─────────────────────────────────────────
     # 실제 관절각 시뮬레이션 (확대된 노이즈)
     # ─────────────────────────────────────────
     def _simulate_real_joints(self, q_cmd):
-        noise    = np.random.uniform(NOISE_LOW_FULL, NOISE_HIGH_FULL, size=3)
+        noise    = np.random.uniform(-self._noise_scale, self._noise_scale, size=3)
         friction = np.random.uniform(0, self._friction, size=3) * np.sign(q_cmd)
         q_real   = q_cmd + noise - friction
         return q_real.astype(np.float32)

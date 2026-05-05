@@ -12,6 +12,9 @@ import os
 import sys
 import glob
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from sim.env_simple import REACH_FINE
+
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
@@ -104,7 +107,7 @@ class MetricsCallback:
                 for info, done in zip(infos, dones):
                     if done and "dist_cm" in info:
                         self_inner._ep_dists.append(info["dist_cm"])
-                        self_inner._ep_success.append(float(info["dist_cm"] < 2.0))
+                        self_inner._ep_success.append(float(info["dist_cm"] < REACH_FINE * 100))
                     if done and "episode" in info:
                         self_inner._ep_rewards.append(info["episode"]["r"])
 

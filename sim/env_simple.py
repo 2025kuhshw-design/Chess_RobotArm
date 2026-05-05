@@ -4,10 +4,16 @@ Sim-to-Real 오차 보정 정책 학습
 """
 
 import os
+import sys
 import math
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+
+# 모듈 레벨에서 경로 추가 및 임포트 (매 호출마다 반복 방지)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from utils.ik_solver import inverse_kinematics
+from utils.lagrange import required_torque, SERVO_LIMIT
 
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
@@ -17,7 +23,7 @@ L1, L2, L3  = 0.140, 0.155, 0.075   # 실측값 (m)
 MAX_STEPS    = 150
 DELTA_LIMIT  = 0.2        # 보정 델타 최대값 (rad)
 REACH_GOOD   = 0.02       # 도달 인정 거리 (m) → +100
-REACH_FINE   = 0.005      # 정밀 도달 거리 (m) → +200
+REACH_FINE   = 0.010      # 정밀 도달 거리 (m) → +200  ※ 1cm (0.5cm는 수렴 불안정)
 TORQUE_LIMIT = 1.27       # N·m
 
 # Sim-to-Real Gap 노이즈 범위
@@ -51,7 +57,6 @@ class ChessArmEnvSimple(gym.Env):
         self.render_mode = render_mode
         self.urdf_path   = urdf_path or os.path.abspath(URDF_PATH)
 
-        # 토크 범위: MG996R 최대 1.27 N·m 기준으로 ±2배 여유
         TAU_LIMIT = 3.0
         self.observation_space = spaces.Box(
             low  = np.array([-math.pi]*3 + [-math.pi]*3 + [-1.0, -1.0, 0.0] + [-TAU_LIMIT]*3, dtype=np.float32),
@@ -67,12 +72,11 @@ class ChessArmEnvSimple(gym.Env):
         self._target_xyz      = None
         self._q_ik            = np.zeros(3)
         self._q_real          = np.zeros(3)
-        self._tau             = np.zeros(3)   # 라그랑주 토크
+        self._tau             = np.zeros(3)
         self._step_count      = 0
-
-        # 노이즈 파라미터 (에피소드마다 갱신)
-        self._noise_scale = 0.0
-        self._friction    = 0.0
+        self._noise_scale     = 0.0
+        self._friction        = 0.0
+        self._prev_dist       = float("inf")
 
         self._init_pybullet()
 
@@ -99,9 +103,6 @@ class ChessArmEnvSimple(gym.Env):
         if os.path.exists(self.urdf_path):
             self._robot_id = p.loadURDF(self.urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
         else:
-            # URDF가 없으면 자동 생성
-            import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
             from setup.stl_to_urdf import generate_simple_urdf
             joint_positions = [[0.0,0.0,0.05],[0.0,0.0,0.33],[0.0,0.0,0.55],[0.0,0.0,0.63]]
             os.makedirs(os.path.dirname(self.urdf_path), exist_ok=True)
@@ -109,6 +110,14 @@ class ChessArmEnvSimple(gym.Env):
             self._robot_id = p.loadURDF(self.urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
 
         self._n_joints = p.getNumJoints(self._robot_id)
+
+    # ─────────────────────────────────────────
+    # DR 파라미터 설정 (에피소드마다 갱신)
+    # env_full에서 오버라이드하여 더 넓은 범위 적용
+    # ─────────────────────────────────────────
+    def _set_dr_params(self):
+        self._noise_scale = np.random.uniform(abs(NOISE_LOW), NOISE_HIGH)
+        self._friction    = np.random.uniform(FRICTION_LOW, FRICTION_HIGH)
 
     # ─────────────────────────────────────────
     # 랜덤 목표 생성 (체스판 64칸 중 랜덤)
@@ -125,9 +134,6 @@ class ChessArmEnvSimple(gym.Env):
     # IK 계산
     # ─────────────────────────────────────────
     def _compute_ik(self, target):
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from utils.ik_solver import inverse_kinematics
         try:
             q1, q2, q3 = inverse_kinematics(target[0], target[1], target[2], L1, L2, L3)
             return np.array([q1, q2, q3], dtype=np.float32)
@@ -136,9 +142,10 @@ class ChessArmEnvSimple(gym.Env):
 
     # ─────────────────────────────────────────
     # 실제 관절각 시뮬레이션 (Sim-to-Real Gap)
+    # self._noise_scale 사용 — 에피소드마다 다른 노이즈 크기 적용
     # ─────────────────────────────────────────
     def _simulate_real_joints(self, q_cmd):
-        noise    = np.random.uniform(NOISE_LOW, NOISE_HIGH, size=3)
+        noise    = np.random.uniform(-self._noise_scale, self._noise_scale, size=3)
         friction = np.random.uniform(0, self._friction, size=3) * np.sign(q_cmd)
         q_real   = q_cmd + noise - friction
         return q_real.astype(np.float32)
@@ -166,14 +173,26 @@ class ChessArmEnvSimple(gym.Env):
         p.stepSimulation()
 
     # ─────────────────────────────────────────
+    # 라그랑주 토크 계산
+    # ─────────────────────────────────────────
+    def _compute_tau(self, q_real) -> np.ndarray:
+        try:
+            tau = required_torque(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
+            return np.clip(tau, -3.0, 3.0).astype(np.float32)
+        except Exception:
+            return np.zeros(3, dtype=np.float32)
+
+    def _get_obs(self):
+        return np.concatenate([self._q_ik, self._q_real, self._target_xyz, self._tau]).astype(np.float32)
+
+    # ─────────────────────────────────────────
     # reset
     # ─────────────────────────────────────────
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # 에피소드마다 Sim-to-Real 파라미터 랜덤화
-        self._noise_scale = np.random.uniform(abs(NOISE_LOW), NOISE_HIGH)
-        self._friction    = np.random.uniform(FRICTION_LOW, FRICTION_HIGH)
+        # DR 파라미터를 먼저 설정해야 _simulate_real_joints가 올바른 값 사용
+        self._set_dr_params()
 
         self._target_xyz  = self._random_target()
         self._q_ik        = self._compute_ik(self._target_xyz)
@@ -188,22 +207,6 @@ class ChessArmEnvSimple(gym.Env):
         return obs, {}
 
     # ─────────────────────────────────────────
-    # 라그랑주 토크 계산
-    # ─────────────────────────────────────────
-    def _compute_tau(self, q_real) -> np.ndarray:
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from utils.lagrange import required_torque
-        try:
-            tau = required_torque(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
-            return np.clip(tau, -3.0, 3.0).astype(np.float32)
-        except Exception:
-            return np.zeros(3, dtype=np.float32)
-
-    def _get_obs(self):
-        return np.concatenate([self._q_ik, self._q_real, self._target_xyz, self._tau]).astype(np.float32)
-
-    # ─────────────────────────────────────────
     # step
     # ─────────────────────────────────────────
     def step(self, action):
@@ -215,32 +218,28 @@ class ChessArmEnvSimple(gym.Env):
         dist    = float(np.linalg.norm(ee_pos - self._target_xyz))
 
         self._q_real = q_real
-        self._tau    = self._compute_tau(q_real)   # 라그랑주 토크 갱신
+        self._tau    = self._compute_tau(q_real)
         self._set_joint_angles(q_real)
         self._step_count += 1
 
         # 보상 계산 (거리 기반 연속 보상 + 단계별 보너스)
-        reward = -dist * 20.0               # 거리 페널티 강화
+        reward = -dist * 20.0
 
-        if dist < 0.10:                     # 10cm 이내
+        if dist < 0.10:
             reward += 10.0
-        if dist < 0.05:                     # 5cm 이내
+        if dist < 0.05:
             reward += 30.0
-        if dist < REACH_GOOD:               # 2cm 이내
+        if dist < REACH_GOOD:
             reward += 100.0
-        if dist < REACH_FINE:               # 0.5cm 이내
+        if dist < REACH_FINE:
             reward += 200.0
 
-        # 이전 스텝보다 가까워졌으면 추가 보상 (방향 학습 유도)
-        prev_dist = getattr(self, "_prev_dist", dist)
-        if dist < prev_dist:
+        # 이전 스텝보다 가까워졌으면 추가 보상
+        if dist < self._prev_dist:
             reward += 5.0
         self._prev_dist = dist
 
         # 라그랑주 토크 한계 페널티
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from utils.lagrange import SERVO_LIMIT
         if np.any(np.abs(self._tau) > SERVO_LIMIT):
             excess = np.sum(np.maximum(np.abs(self._tau) - SERVO_LIMIT, 0))
             reward -= 30.0 + excess * 5.0
