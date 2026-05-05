@@ -18,7 +18,7 @@ L3_DEFAULT = 0.075   # 손목~흡착기 (m) — 실측 75mm
 # 가장 먼 칸까지 거리 ≈ 270mm < 유효 도달 283mm
 BOARD_ORIGIN_X = 0.015   # 체스판 원점(좌하코너) x (m)
 BOARD_ORIGIN_Y = -0.115  # 체스판 원점(좌하코너) y (m)
-CELL_SIZE      = 0.028   # 한 칸 크기 (m)
+CELL_SIZE      = 0.029125  # 한 칸 크기 (m) — 23.3cm ÷ 8칸
 PIECE_Z        = 0.015   # 기물 높이 (m)
 LIFT_DEFAULT   = 0.08    # 안전 접근 높이 (m) — 팔 짧아서 축소
 

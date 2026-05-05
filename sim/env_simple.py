@@ -31,7 +31,7 @@ FRICTION_HIGH=  0.15
 # 체스판 설정 (랜덤 목표 생성용)
 BOARD_ORIGIN_X = 0.015
 BOARD_ORIGIN_Y = -0.115
-CELL_SIZE      = 0.028
+CELL_SIZE      = 0.029125  # 한 칸 크기 (m) — 23.3cm ÷ 8칸
 PIECE_Z        = 0.015
 
 
