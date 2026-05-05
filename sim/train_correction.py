@@ -18,7 +18,7 @@ from sim.env_simple import REACH_FINE
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
-STAGE1_STEPS   = 2_000_000
+STAGE1_STEPS   = 3_000_000
 STAGE2_STEPS   = 1_000_000
 LEARNING_RATE  = 3e-4
 N_STEPS        = 2048
