@@ -20,7 +20,7 @@ FRICTION_LOW_FULL =  0.01
 FRICTION_HIGH_FULL=  0.30
 MASS_VARIATION    =  0.20   # ±20%
 
-BASE_MASSES = [0.3, 0.2, 0.1]   # 링크 기본 질량 (kg)
+BASE_MASSES = [0.12, 0.08, 0.04]  # 링크 기본 질량 (kg) — lagrange.py와 동기화
 
 
 class ChessArmEnvFull(ChessArmEnvSimple):

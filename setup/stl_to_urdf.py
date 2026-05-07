@@ -18,8 +18,11 @@ JOINT_SPECS = {
     "joint2": {"axis": "0 1 0", "lower": -1.2,  "upper": 1.2},    # 어깨 Y축
     "joint3": {"axis": "0 1 0", "lower": -1.5,  "upper": 1.5},    # 팔꿈치 Y축
 }
-LINK_MASSES = [0.3, 0.2, 0.1]   # link1, link2, end_effector (kg)
-LINK_WIDTH  = 0.04               # 링크 단면 크기 (m)
+# MG996R 기반 링크 질량 (kg): 서보 55g + 3D프린트 링크 기준 추정
+LINK_MASSES    = [0.12, 0.08, 0.04]
+LINK_WIDTH     = 0.04              # 링크 단면 크기 (m)
+# MG996R 속도: 0.14초/60° at 6V = 7.5 rad/s → 부하 고려 6.0 rad/s
+SERVO_VELOCITY = 6.0               # rad/s
 
 
 # ─────────────────────────────────────────
@@ -145,7 +148,7 @@ def generate_simple_urdf(joint_positions: list, output_path: str) -> None:
             lower, upper = 0.0, 0.0
 
         limit_line = (
-            f'      <limit lower="{lower}" upper="{upper}" effort="1.27" velocity="1.0"/>'
+            f'      <limit lower="{lower}" upper="{upper}" effort="1.27" velocity="{SERVO_VELOCITY}"/>'
             if jtype == "revolute" else ""
         )
 
@@ -245,7 +248,7 @@ def generate_full_urdf(stl_paths: list, joint_positions: list, output_path: str)
             f'    <axis xyz="{axis}"/>',
         ]
         if jtype == "revolute":
-            lines.append(f'    <limit lower="{lower}" upper="{upper}" effort="1.27" velocity="1.0"/>')
+            lines.append(f'    <limit lower="{lower}" upper="{upper}" effort="1.27" velocity="{SERVO_VELOCITY}"/>')
         lines.append("  </joint>")
 
     lines.append("</robot>")
