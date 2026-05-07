@@ -1,7 +1,7 @@
 """
 RL 보정 모델 학습 스크립트 (PPO, stable-baselines3)
-1단계: env_simple → 500,000 스텝
-2단계: env_full  → 1,000,000 스텝 (1단계 이어서)
+1단계: env_simple → 3,000,000 스텝
+2단계: env_full  → 1,500,000 스텝 (1단계 이어서)
 
 Google Colab A100 실행 지원:
   - 드라이브 마운트 자동 처리
@@ -11,6 +11,7 @@ Google Colab A100 실행 지원:
 import os
 import sys
 import glob
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sim.env_simple import REACH_FINE
@@ -18,21 +19,30 @@ from sim.env_simple import REACH_FINE
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
-STAGE1_STEPS   = 3_000_000
-STAGE2_STEPS   = 1_000_000
-LEARNING_RATE  = 3e-4
-N_STEPS        = 2048
-BATCH_SIZE     = 64
-ENT_COEF       = 0.005
-CHECKPOINT_FREQ= 50_000   # 체크포인트 저장 간격
+STAGE1_STEPS    = 3_000_000
+STAGE2_STEPS    = 1_500_000
+N_ENVS          = 4           # 병렬 환경 수 (샘플 다양성 ↑)
+N_STEPS         = 2048        # 환경당 롤아웃 길이
+BATCH_SIZE      = 256         # 4envs × 2048 / 32 minibatches
+ENT_COEF_S1     = 0.01        # 1단계: 탐색 강화
+ENT_COEF_S2     = 0.005       # 2단계: 수렴 안정화
+EVAL_FREQ       = 50_000      # EvalCallback 평가 주기 (스텝)
+N_EVAL_EPS      = 10          # 평가 에피소드 수
+CHECKPOINT_FREQ = 50_000      # 체크포인트 저장 주기
 
-# 로컬 저장 경로
 LOCAL_MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models", "correction_model")
-
-# Colab 드라이브 경로 (Colab에서만 유효)
 COLAB_DRIVE_DIR = "/content/drive/MyDrive/chess_robot/correction_model"
+IS_COLAB        = "google.colab" in sys.modules or os.path.exists("/content")
 
-IS_COLAB = "google.colab" in sys.modules or os.path.exists("/content")
+
+# ─────────────────────────────────────────
+# 학습률 선형 감소 스케줄
+# ─────────────────────────────────────────
+def linear_schedule(initial_value: float):
+    """progress_remaining: 1.0(시작) → 0.0(종료) 선형 감소."""
+    def func(progress_remaining: float) -> float:
+        return max(progress_remaining * initial_value, 1e-5)
+    return func
 
 
 # ─────────────────────────────────────────
@@ -53,76 +63,133 @@ def mount_drive_if_colab():
 
 
 # ─────────────────────────────────────────
-# 최신 체크포인트 자동 탐색
+# 최신 체크포인트 탐색
 # ─────────────────────────────────────────
-def find_latest_checkpoint(model_dir: str, prefix: str = "rl_model") -> str | None:
+def find_latest_checkpoint(model_dir: str, prefix: str) -> str | None:
     pattern = os.path.join(model_dir, f"{prefix}_*_steps.zip")
     files   = glob.glob(pattern)
     if not files:
         return None
-    # 파일명에서 스텝 수 추출 후 최대값
     def extract_steps(path):
-        basename = os.path.basename(path)
         try:
-            return int(basename.split("_")[-2])
+            return int(os.path.basename(path).split("_")[-2])
         except Exception:
             return 0
     return max(files, key=extract_steps)
 
 
 # ─────────────────────────────────────────
-# 체크포인트 콜백
+# VecEnv 생성 (병렬 환경 + 보상 정규화)
 # ─────────────────────────────────────────
-def make_checkpoint_callback(save_dir: str, prefix: str):
-    from stable_baselines3.common.callbacks import CheckpointCallback
+def _make_env(env_class, rank: int):
+    def _init():
+        from stable_baselines3.common.monitor import Monitor
+        return Monitor(env_class())
+    return _init
+
+
+def make_vec_env(env_class, n_envs: int):
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+    venv = DummyVecEnv([_make_env(env_class, i) for i in range(n_envs)])
+    # norm_obs=False: 관측값이 이미 유계 → 정규화 불필요
+    # norm_reward=True: 보상 스케일 정규화로 학습 안정화
+    venv = VecNormalize(venv, norm_obs=False, norm_reward=True, clip_reward=10.0)
+    return venv
+
+
+def load_vec_env(env_class, n_envs: int, norm_path: str):
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+    venv = DummyVecEnv([_make_env(env_class, i) for i in range(n_envs)])
+    if os.path.exists(norm_path):
+        venv = VecNormalize.load(norm_path, venv)
+        venv.training = True
+        print(f"[VecNormalize] 통계 로드: {norm_path}")
+    else:
+        venv = VecNormalize(venv, norm_obs=False, norm_reward=True, clip_reward=10.0)
+        print("[VecNormalize] 새로 시작")
+    return venv
+
+
+# ─────────────────────────────────────────
+# 체크포인트 + VecNormalize 동시 저장 콜백
+# ─────────────────────────────────────────
+def make_checkpoint_callback(save_dir: str, prefix: str, vec_env):
+    from stable_baselines3.common.callbacks import BaseCallback
     os.makedirs(save_dir, exist_ok=True)
-    return CheckpointCallback(
-        save_freq    = CHECKPOINT_FREQ,
-        save_path    = save_dir,
-        name_prefix  = prefix,
-        verbose      = 1,
+    _last_save = [0]
+
+    class _Callback(BaseCallback):
+        def __init__(self):
+            super().__init__(verbose=1)
+
+        def _on_step(self) -> bool:
+            if self.num_timesteps - _last_save[0] >= CHECKPOINT_FREQ:
+                _last_save[0] = self.num_timesteps
+                path = os.path.join(save_dir, f"{prefix}_{self.num_timesteps}_steps")
+                self.model.save(path)
+                vec_env.save(os.path.join(save_dir, f"{prefix}_vecnorm.pkl"))
+                print(f"  체크포인트 저장: {path}.zip")
+            return True
+
+    return _Callback()
+
+
+# ─────────────────────────────────────────
+# EvalCallback (과적합 감지 + best model 저장)
+# ─────────────────────────────────────────
+def make_eval_callback(env_class, model_dir: str):
+    from stable_baselines3.common.callbacks import EvalCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.monitor import Monitor
+
+    # 평가 환경은 VecNormalize 미적용 → 실제 보상값 그대로 측정
+    eval_env = DummyVecEnv([lambda: Monitor(env_class())])
+    return EvalCallback(
+        eval_env,
+        best_model_save_path = os.path.join(model_dir, "best"),
+        log_path             = os.path.join(model_dir, "eval_logs"),
+        eval_freq            = EVAL_FREQ,
+        n_eval_episodes      = N_EVAL_EPS,
+        deterministic        = True,
+        render               = False,
+        verbose              = 1,
     )
 
 
 # ─────────────────────────────────────────
-# TensorBoard 커스텀 콜백 (평균 오차·성공률)
+# TensorBoard 커스텀 메트릭 콜백
 # ─────────────────────────────────────────
-class MetricsCallback:
-    """에피소드 info에서 dist_cm, 성공 여부 집계."""
+def make_metrics_callback():
+    from stable_baselines3.common.callbacks import BaseCallback
 
-    def __init__(self):
-        from stable_baselines3.common.callbacks import BaseCallback
-        import numpy as np
+    class _Callback(BaseCallback):
+        def __init__(self):
+            super().__init__(verbose=0)
+            self._ep_dists   = []
+            self._ep_success = []
+            self._ep_rewards = []
 
-        class _Inner(BaseCallback):
-            def __init__(self_inner):
-                super().__init__(verbose=0)
-                self_inner._ep_dists    = []
-                self_inner._ep_success  = []
-                self_inner._ep_rewards  = []
+        def _on_step(self) -> bool:
+            infos = self.locals.get("infos", [])
+            dones = self.locals.get("dones", [])
+            for info, done in zip(infos, dones):
+                if done and "dist_cm" in info:
+                    self._ep_dists.append(info["dist_cm"])
+                    self._ep_success.append(float(info["dist_cm"] < REACH_FINE * 100))
+                if done and "episode" in info:
+                    self._ep_rewards.append(info["episode"]["r"])
 
-            def _on_step(self_inner) -> bool:
-                infos = self_inner.locals.get("infos", [])
-                dones = self_inner.locals.get("dones", [])
-                for info, done in zip(infos, dones):
-                    if done and "dist_cm" in info:
-                        self_inner._ep_dists.append(info["dist_cm"])
-                        self_inner._ep_success.append(float(info["dist_cm"] < REACH_FINE * 100))
-                    if done and "episode" in info:
-                        self_inner._ep_rewards.append(info["episode"]["r"])
+            if len(self._ep_dists) >= 20:
+                self.logger.record("custom/mean_dist_cm", float(np.mean(self._ep_dists)))
+                self.logger.record("custom/success_rate", float(np.mean(self._ep_success)))
+                if self._ep_rewards:
+                    self.logger.record("custom/mean_reward", float(np.mean(self._ep_rewards)))
+                self._ep_dists.clear()
+                self._ep_success.clear()
+                self._ep_rewards.clear()
+            return True
 
-                if len(self_inner._ep_dists) >= 10:
-                    import numpy as np
-                    self_inner.logger.record("custom/mean_dist_cm",   float(np.mean(self_inner._ep_dists)))
-                    self_inner.logger.record("custom/success_rate",   float(np.mean(self_inner._ep_success)))
-                    if self_inner._ep_rewards:
-                        self_inner.logger.record("custom/mean_reward", float(np.mean(self_inner._ep_rewards)))
-                    self_inner._ep_dists.clear()
-                    self_inner._ep_success.clear()
-                    self_inner._ep_rewards.clear()
-                return True
-
-        self.callback = _Inner()
+    return _Callback()
 
 
 # ─────────────────────────────────────────
@@ -130,39 +197,44 @@ class MetricsCallback:
 # ─────────────────────────────────────────
 def train_stage1(model_dir: str) -> str:
     from stable_baselines3 import PPO
-    from stable_baselines3.common.monitor import Monitor
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from stable_baselines3.common.callbacks import CallbackList
     from sim.env_simple import ChessArmEnvSimple
 
     print("\n" + "="*50)
     print("1단계 학습 시작 (env_simple, PPO)")
     print("="*50)
 
-    env = Monitor(ChessArmEnvSimple())
-
+    norm_path = os.path.join(model_dir, "stage1_vecnorm.pkl")
     ckpt_path = find_latest_checkpoint(model_dir, "stage1")
+    env       = load_vec_env(ChessArmEnvSimple, N_ENVS, norm_path)
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
-        model = PPO.load(ckpt_path, env=env)
+        model         = PPO.load(ckpt_path, env=env)
         trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
         remaining     = max(0, STAGE1_STEPS - trained_steps)
     else:
         print("[새로 학습 시작]")
         model = PPO(
             "MlpPolicy", env,
-            learning_rate = LEARNING_RATE,
-            n_steps       = N_STEPS,
-            batch_size    = BATCH_SIZE,
-            ent_coef      = ENT_COEF,
+            learning_rate   = linear_schedule(3e-4),
+            n_steps         = N_STEPS,
+            batch_size      = BATCH_SIZE,
+            ent_coef        = ENT_COEF_S1,
+            n_epochs        = 10,
+            gamma           = 0.99,
+            gae_lambda      = 0.95,
+            clip_range      = 0.2,
+            max_grad_norm   = 0.5,
             tensorboard_log = os.path.join(model_dir, "tb_logs"),
-            verbose       = 1,
+            verbose         = 1,
         )
         remaining = STAGE1_STEPS
 
-    from stable_baselines3.common.callbacks import CallbackList
     callbacks = CallbackList([
-        make_checkpoint_callback(model_dir, "stage1"),
-        MetricsCallback().callback,
+        make_checkpoint_callback(model_dir, "stage1", env),
+        make_metrics_callback(),
+        make_eval_callback(ChessArmEnvSimple, model_dir),
     ])
 
     if remaining > 0:
@@ -170,6 +242,7 @@ def train_stage1(model_dir: str) -> str:
 
     save_path = os.path.join(model_dir, "stage1_final")
     model.save(save_path)
+    env.save(norm_path)
     env.close()
     print(f"\n✅ 1단계 학습 완료: {save_path}")
     return save_path
@@ -180,31 +253,32 @@ def train_stage1(model_dir: str) -> str:
 # ─────────────────────────────────────────
 def train_stage2(stage1_path: str, model_dir: str) -> str:
     from stable_baselines3 import PPO
-    from stable_baselines3.common.monitor import Monitor
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from stable_baselines3.common.callbacks import CallbackList
     from sim.env_full import ChessArmEnvFull
 
     print("\n" + "="*50)
     print("2단계 학습 시작 (env_full, Domain Randomization)")
     print("="*50)
 
-    env = Monitor(ChessArmEnvFull())
-
+    norm_path = os.path.join(model_dir, "stage2_vecnorm.pkl")
     ckpt_path = find_latest_checkpoint(model_dir, "stage2")
+    env       = load_vec_env(ChessArmEnvFull, N_ENVS, norm_path)
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
-        model = PPO.load(ckpt_path, env=env)
+        model         = PPO.load(ckpt_path, env=env)
         trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
         remaining     = max(0, STAGE2_STEPS - trained_steps)
     else:
         print(f"[1단계 모델 로드] {stage1_path}")
-        model = PPO.load(stage1_path, env=env)
-        remaining = STAGE2_STEPS
+        model           = PPO.load(stage1_path, env=env)
+        model.ent_coef  = ENT_COEF_S2   # 수렴 단계: 탐색 줄임
+        remaining       = STAGE2_STEPS
 
-    from stable_baselines3.common.callbacks import CallbackList
     callbacks = CallbackList([
-        make_checkpoint_callback(model_dir, "stage2"),
-        MetricsCallback().callback,
+        make_checkpoint_callback(model_dir, "stage2", env),
+        make_metrics_callback(),
+        make_eval_callback(ChessArmEnvFull, model_dir),
     ])
 
     if remaining > 0:
@@ -212,6 +286,7 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
 
     save_path = os.path.join(model_dir, "stage2_final")
     model.save(save_path)
+    env.save(norm_path)
     env.close()
     print(f"\n✅ 2단계 학습 완료: {save_path}")
     return save_path
@@ -233,7 +308,7 @@ if __name__ == "__main__":
     os.makedirs(model_dir, exist_ok=True)
 
     if args.stage == 1:
-        stage1_path = train_stage1(model_dir)
+        train_stage1(model_dir)
     else:
         s1_path = args.stage1_model or os.path.join(model_dir, "stage1_final")
         if not os.path.exists(s1_path + ".zip"):
