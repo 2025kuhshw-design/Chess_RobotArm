@@ -23,6 +23,7 @@ MODEL_DIR          = os.path.join(os.path.dirname(__file__), "models", "correcti
 CALIB_PATH         = os.path.join(os.path.dirname(__file__), "vision", "calibration.json")
 
 sys.path.insert(0, os.path.dirname(__file__))
+from sim.env_simple import TAU_OBS_LIMIT
 
 
 # ─────────────────────────────────────────
@@ -119,7 +120,7 @@ def run_game(args, arm, detector, rl_model):
             if rl_model is not None:
                 from utils.lagrange import required_torque
                 tau = required_torque([q1,q2,q3], [0,0,0], [0.1,0.1,0.1])
-                tau_clipped = np.clip(tau, -3.0, 3.0)
+                tau_clipped = np.clip(tau, -TAU_OBS_LIMIT, TAU_OBS_LIMIT)
                 obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
                                 tau_clipped[0], tau_clipped[1], tau_clipped[2]], dtype=np.float32)
                 delta, _ = rl_model.predict(obs, deterministic=True)
@@ -208,11 +209,12 @@ def main():
     else:
         print(f"[카메라] calibration.json 없음 → 터미널 입력 모드")
 
-    run_game(args, arm, detector, rl_model)
-
-    if detector:
-        detector.close()
-    arm.close()
+    try:
+        run_game(args, arm, detector, rl_model)
+    finally:
+        if detector:
+            detector.close()
+        arm.close()
 
 
 if __name__ == "__main__":

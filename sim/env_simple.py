@@ -12,7 +12,9 @@ from gymnasium import spaces
 
 # 모듈 레벨에서 경로 추가 및 임포트 (매 호출마다 반복 방지)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.ik_solver import inverse_kinematics
+from utils.ik_solver import (inverse_kinematics,
+                              BOARD_ORIGIN_X, BOARD_ORIGIN_Y,
+                              CELL_SIZE, PIECE_Z)
 from utils.lagrange import required_torque, SERVO_LIMIT
 
 # ─────────────────────────────────────────
@@ -23,8 +25,12 @@ L1, L2, L3  = 0.140, 0.155, 0.075   # 실측값 (m)
 MAX_STEPS    = 150
 DELTA_LIMIT  = 0.2        # 보정 델타 최대값 (rad)
 REACH_GOOD   = 0.02       # 도달 인정 거리 (m) → +100
-REACH_FINE   = 0.010      # 정밀 도달 거리 (m) → +200  ※ 1cm (0.5cm는 수렴 불안정)
-TORQUE_LIMIT = 1.27       # N·m
+REACH_FINE    = 0.010     # 정밀 도달 거리 (m) → +200  ※ 1cm (0.5cm는 수렴 불안정)
+TORQUE_LIMIT  = 1.27      # N·m
+TAU_OBS_LIMIT = 3.0       # 관측값 토크 클리핑 범위 (N·m) — observation_space 및 main.py 공유
+
+# q_real 관측값 범위: q_ik(±π) + action(±0.2) + noise(±0.05) + friction(0.15) → ±π + 0.4 여유
+OBS_Q_LIMIT  = math.pi + 0.5
 
 # Sim-to-Real Gap 노이즈 범위
 NOISE_LOW    = -0.05
@@ -33,12 +39,6 @@ DELAY_LOW    =  0.0
 DELAY_HIGH   =  0.03
 FRICTION_LOW =  0.01
 FRICTION_HIGH=  0.15
-
-# 체스판 설정 (랜덤 목표 생성용)
-BOARD_ORIGIN_X = 0.015
-BOARD_ORIGIN_Y = -0.115
-CELL_SIZE      = 0.029125  # 한 칸 크기 (m) — 23.3cm ÷ 8칸
-PIECE_Z        = 0.015
 
 
 class ChessArmEnvSimple(gym.Env):
@@ -57,10 +57,9 @@ class ChessArmEnvSimple(gym.Env):
         self.render_mode = render_mode
         self.urdf_path   = urdf_path or os.path.abspath(URDF_PATH)
 
-        TAU_LIMIT = 3.0
         self.observation_space = spaces.Box(
-            low  = np.array([-math.pi]*3 + [-math.pi]*3 + [-1.0, -1.0, 0.0] + [-TAU_LIMIT]*3, dtype=np.float32),
-            high = np.array([ math.pi]*3 + [ math.pi]*3 + [ 1.0,  1.0, 1.0] + [ TAU_LIMIT]*3, dtype=np.float32),
+            low  = np.array([-math.pi]*3 + [-OBS_Q_LIMIT]*3 + [-1.0, -1.0, 0.0] + [-TAU_OBS_LIMIT]*3, dtype=np.float32),
+            high = np.array([ math.pi]*3 + [ OBS_Q_LIMIT]*3 + [ 1.0,  1.0, 1.0] + [ TAU_OBS_LIMIT]*3, dtype=np.float32),
         )
         self.action_space = spaces.Box(
             low  = np.full(3, -DELTA_LIMIT, dtype=np.float32),
@@ -178,7 +177,7 @@ class ChessArmEnvSimple(gym.Env):
     def _compute_tau(self, q_real) -> np.ndarray:
         try:
             tau = required_torque(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
-            return np.clip(tau, -3.0, 3.0).astype(np.float32)
+            return np.clip(tau, -TAU_OBS_LIMIT, TAU_OBS_LIMIT).astype(np.float32)
         except Exception:
             return np.zeros(3, dtype=np.float32)
 
