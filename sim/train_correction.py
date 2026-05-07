@@ -139,11 +139,13 @@ def make_checkpoint_callback(save_dir: str, prefix: str, vec_env):
 # ─────────────────────────────────────────
 def make_eval_callback(env_class, model_dir: str):
     from stable_baselines3.common.callbacks import EvalCallback
-    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
     from stable_baselines3.common.monitor import Monitor
 
-    # 평가 환경은 VecNormalize 미적용 → 실제 보상값 그대로 측정
+    # 학습 env와 동일하게 VecNormalize로 감싸되 training=False, norm_reward=False
+    # → 관측 정규화 통계 동기화 허용 + 실제 보상값 그대로 측정
     eval_env = DummyVecEnv([lambda: Monitor(env_class())])
+    eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=False, training=False)
     return EvalCallback(
         eval_env,
         best_model_save_path = os.path.join(model_dir, "best"),
