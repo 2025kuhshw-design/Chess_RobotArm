@@ -81,18 +81,20 @@ def find_latest_checkpoint(model_dir: str, prefix: str) -> str | None:
 # ─────────────────────────────────────────
 # VecEnv 생성 (병렬 환경 + 보상 정규화)
 # ─────────────────────────────────────────
-def _make_env(env_class, rank: int):
+def _make_env(env_class, rank: int, render: bool = False):
     def _init():
         from stable_baselines3.common.monitor import Monitor
-        env = Monitor(env_class())
+        # rank=0인 환경만 GUI로 열어 학습 과정 시각화 (나머지는 headless)
+        mode = "human" if (render and rank == 0) else None
+        env = Monitor(env_class(render_mode=mode))
         env.reset(seed=rank)
         return env
     return _init
 
 
-def load_vec_env(env_class, n_envs: int, norm_path: str):
+def load_vec_env(env_class, n_envs: int, norm_path: str, render: bool = False):
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-    venv = DummyVecEnv([_make_env(env_class, i) for i in range(n_envs)])
+    venv = DummyVecEnv([_make_env(env_class, i, render=(render and i == 0)) for i in range(n_envs)])
     if os.path.exists(norm_path):
         venv = VecNormalize.load(norm_path, venv)
         venv.training = True
@@ -190,7 +192,7 @@ def make_metrics_callback():
 # ─────────────────────────────────────────
 # 1단계 학습
 # ─────────────────────────────────────────
-def train_stage1(model_dir: str) -> str:
+def train_stage1(model_dir: str, render: bool = False) -> str:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CallbackList
     from sim.env_simple import ChessArmEnvSimple
@@ -201,7 +203,7 @@ def train_stage1(model_dir: str) -> str:
 
     norm_path = os.path.join(model_dir, "stage1_vecnorm.pkl")
     ckpt_path = find_latest_checkpoint(model_dir, "stage1")
-    env       = load_vec_env(ChessArmEnvSimple, N_ENVS, norm_path)
+    env       = load_vec_env(ChessArmEnvSimple, N_ENVS, norm_path, render=render)
 
     from stable_baselines3.common.utils import get_schedule_fn
 
@@ -255,7 +257,7 @@ def train_stage1(model_dir: str) -> str:
 # ─────────────────────────────────────────
 # 2단계 학습
 # ─────────────────────────────────────────
-def train_stage2(stage1_path: str, model_dir: str) -> str:
+def train_stage2(stage1_path: str, model_dir: str, render: bool = False) -> str:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CallbackList
     from sim.env_full import ChessArmEnvFull
@@ -270,7 +272,7 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
 
     norm_path = os.path.join(model_dir, "stage2_vecnorm.pkl")
     ckpt_path = find_latest_checkpoint(model_dir, "stage2")
-    env       = load_vec_env(ChessArmEnvFull, N_ENVS, norm_path)
+    env       = load_vec_env(ChessArmEnvFull, N_ENVS, norm_path, render=render)
 
     from stable_baselines3.common.utils import get_schedule_fn
 
@@ -318,13 +320,15 @@ if __name__ == "__main__":
                         help="학습 단계 (1: env_simple, 2: env_full)")
     parser.add_argument("--stage1-model", type=str, default=None,
                         help="2단계 시작 시 사용할 1단계 모델 경로")
+    parser.add_argument("--render", action="store_true",
+                        help="env[0]을 PyBullet GUI로 열어 학습 과정 실시간 시각화")
     args = parser.parse_args()
 
     model_dir = mount_drive_if_colab()
     os.makedirs(model_dir, exist_ok=True)
 
     if args.stage == 1:
-        train_stage1(model_dir)
+        train_stage1(model_dir, render=args.render)
     else:
         s1_path = args.stage1_model or os.path.join(model_dir, "stage1_final")
         if not os.path.exists(s1_path + ".zip"):
@@ -335,5 +339,5 @@ if __name__ == "__main__":
                 print(f"[stage1_final 없음] 최신 체크포인트로 대체: {ckpt}")
             else:
                 print("[경고] 1단계 모델 없음 → 1단계부터 자동 실행")
-                s1_path = train_stage1(model_dir)
-        train_stage2(s1_path, model_dir)
+                s1_path = train_stage1(model_dir, render=args.render)
+        train_stage2(s1_path, model_dir, render=args.render)
