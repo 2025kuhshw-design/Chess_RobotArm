@@ -208,10 +208,11 @@ def train_stage1(model_dir: str, render: bool = False) -> str:
 
     from stable_baselines3.common.utils import get_schedule_fn
 
+    from stable_baselines3.common.logger import configure as sb3_configure
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
         model = PPO.load(ckpt_path, env=env)
-        # PPO.load()는 저장 당시 하이퍼파라미터를 복원하므로 새 값으로 강제 덮어쓰기
         model.learning_rate = linear_schedule(3e-4)
         model.lr_schedule   = get_schedule_fn(model.learning_rate)
         model.ent_coef      = ENT_COEF_S1
@@ -228,10 +229,13 @@ def train_stage1(model_dir: str, render: bool = False) -> str:
             gae_lambda      = 0.95,
             clip_range      = 0.2,
             max_grad_norm   = 0.5,
-            tensorboard_log = os.path.join(model_dir, "tb_logs"),
             verbose         = 1,
         )
 
+    # 체크포인트 재시작마다 같은 폴더에 기록 (PPO_1, PPO_2 분산 방지)
+    model.set_logger(sb3_configure(
+        os.path.join(model_dir, "tb_logs", "stage1"), ["stdout", "tensorboard"]
+    ))
     remaining = max(0, STAGE1_STEPS - model.num_timesteps)
 
     callbacks = CallbackList([
@@ -277,6 +281,8 @@ def train_stage2(stage1_path: str, model_dir: str, render: bool = False) -> str:
 
     from stable_baselines3.common.utils import get_schedule_fn
 
+    from stable_baselines3.common.logger import configure as sb3_configure
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
         model = PPO.load(ckpt_path, env=env)
@@ -287,7 +293,11 @@ def train_stage2(stage1_path: str, model_dir: str, render: bool = False) -> str:
     model.learning_rate = linear_schedule(3e-4)
     model.lr_schedule   = get_schedule_fn(model.learning_rate)
     model.ent_coef      = ENT_COEF_S2
-    # model.num_timesteps 기준으로 남은 스텝 계산 (절대값 비교)
+
+    # 체크포인트 재시작마다 같은 폴더에 기록 (PPO_1, PPO_2 분산 방지)
+    model.set_logger(sb3_configure(
+        os.path.join(model_dir, "tb_logs", "stage2"), ["stdout", "tensorboard"]
+    ))
     remaining = max(0, total_target - model.num_timesteps)
 
     callbacks = CallbackList([
