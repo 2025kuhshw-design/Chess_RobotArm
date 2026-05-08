@@ -48,9 +48,7 @@ class ChessArmEnvFull(ChessArmEnvSimple):
         p = self._p
         if self._robot_id is None:
             return
-        joint_indices = [i for i in range(self._n_joints)
-                         if p.getJointInfo(self._robot_id, i)[2] == p.JOINT_REVOLUTE]
-        for i, link_idx in enumerate(joint_indices[:3]):
+        for i, link_idx in enumerate(self._revolute_indices):
             base_mass = BASE_MASSES[i]
             variation = np.random.uniform(-MASS_VARIATION, MASS_VARIATION)
             new_mass  = base_mass * (1.0 + variation)

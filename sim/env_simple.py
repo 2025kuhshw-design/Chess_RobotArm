@@ -116,6 +116,11 @@ class ChessArmEnvSimple(gym.Env):
             self._robot_id = p.loadURDF(self.urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
 
         self._n_joints  = p.getNumJoints(self._robot_id)
+        # 회전 관절 인덱스를 한 번만 계산해 캐싱 (매 스텝 getJointInfo 반복 방지)
+        self._revolute_indices = [
+            i for i in range(self._n_joints)
+            if p.getJointInfo(self._robot_id, i)[2] == p.JOINT_REVOLUTE
+        ][:3]
         self._target_body = None
 
         if self._is_gui:
@@ -218,9 +223,7 @@ class ChessArmEnvSimple(gym.Env):
     # ─────────────────────────────────────────
     def _set_joint_angles(self, q):
         p = self._p
-        joint_indices = [i for i in range(self._n_joints)
-                         if p.getJointInfo(self._robot_id, i)[2] == p.JOINT_REVOLUTE]
-        rev_indices = joint_indices[:3]
+        rev_indices = self._revolute_indices
 
         if self._is_gui and self._slow_render:
             # 현재 관절각 읽기
