@@ -3,12 +3,14 @@ STL → URDF 자동 생성 도구
 - 기능1: STL 바운딩 박스 추출
 - 기능2: 관절 좌표 리스트로 단순 URDF 생성 (box)
 - 기능3: STL 참조 URDF 생성 (mesh)
+- 기능4: 조립된 STL → 링크별 STL 자동 분리 (연결 컴포넌트 분석)
 """
 
 import struct
 import os
 import math
 import numpy as np
+from collections import defaultdict
 
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
@@ -69,6 +71,102 @@ def stl_bounding_box(stl_path: str) -> dict:
     sizes_m = sizes * 0.001         # mm → m
     longest = float(sizes_m.max())
     return {"size_mm": sizes.tolist(), "size_m": sizes_m.tolist(), "length_m": longest}
+
+
+# ─────────────────────────────────────────
+# 기능 4: 조립된 STL → 링크별 STL 자동 분리
+# ─────────────────────────────────────────
+def _parse_stl_triangles(stl_path: str) -> list:
+    """바이너리 STL에서 삼각형 리스트 반환. 각 원소: (normal, v0, v1, v2)"""
+    triangles = []
+    with open(stl_path, "rb") as f:
+        f.read(80)  # header
+        n = struct.unpack("<I", f.read(4))[0]
+        for _ in range(n):
+            normal = struct.unpack("<fff", f.read(12))
+            v0     = struct.unpack("<fff", f.read(12))
+            v1     = struct.unpack("<fff", f.read(12))
+            v2     = struct.unpack("<fff", f.read(12))
+            f.read(2)  # attribute
+            triangles.append((normal, v0, v1, v2))
+    return triangles
+
+
+def _write_stl_binary(triangles: list, path: str) -> None:
+    """삼각형 리스트를 바이너리 STL로 저장."""
+    with open(path, "wb") as f:
+        f.write(b"\x00" * 80)
+        f.write(struct.pack("<I", len(triangles)))
+        for normal, v0, v1, v2 in triangles:
+            f.write(struct.pack("<fff", *normal))
+            f.write(struct.pack("<fff", *v0))
+            f.write(struct.pack("<fff", *v1))
+            f.write(struct.pack("<fff", *v2))
+            f.write(b"\x00\x00")
+
+
+def split_stl_components(stl_path: str, output_dir: str,
+                         link_names: list = None) -> list:
+    """
+    조립된 STL을 연결 컴포넌트별로 분리해 링크별 STL로 저장.
+    Z 중심 오름차순 정렬 → base_link(최하단) … end_effector(최상단) 순.
+
+    반환: 저장된 STL 경로 리스트
+    """
+    if link_names is None:
+        link_names = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
+
+    print(f"[분리] STL 파싱 중: {stl_path}")
+    triangles = _parse_stl_triangles(stl_path)
+    print(f"  총 삼각형: {len(triangles):,}개")
+
+    # 정점 → 삼각형 인덱스 매핑 (소수점 2자리 반올림으로 근접 정점 병합)
+    vert_to_tris = defaultdict(list)
+    for ti, (_, v0, v1, v2) in enumerate(triangles):
+        for v in (v0, v1, v2):
+            key = (round(v[0], 2), round(v[1], 2), round(v[2], 2))
+            vert_to_tris[key].append(ti)
+
+    # Union-Find
+    parent = list(range(len(triangles)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for tris in vert_to_tris.values():
+        root = find(tris[0])
+        for t in tris[1:]:
+            parent[find(t)] = root
+
+    # 컴포넌트별 삼각형 집합
+    comps = defaultdict(list)
+    for ti, tri in enumerate(triangles):
+        comps[find(ti)].append(tri)
+
+    print(f"  발견된 컴포넌트: {len(comps)}개")
+
+    # Z 중심 오름차순 정렬 (베이스가 가장 아래)
+    def z_center(tris):
+        return sum((t[1][2] + t[2][2] + t[3][2]) / 3 for t in tris) / len(tris)
+
+    sorted_comps = sorted(comps.values(), key=z_center)
+
+    # 저장
+    os.makedirs(output_dir, exist_ok=True)
+    saved = []
+    for i, tris in enumerate(sorted_comps):
+        name = link_names[i] if i < len(link_names) else f"part{i}.stl"
+        out  = os.path.join(output_dir, name)
+        _write_stl_binary(tris, out)
+        bb   = stl_bounding_box(out)
+        print(f"  [{i}] {name}: {len(tris):,}삼각형, "
+              f"크기 {[round(s,1) for s in bb['size_mm']]} mm")
+        saved.append(out)
+
+    return saved
 
 
 # ─────────────────────────────────────────
@@ -275,23 +373,25 @@ if __name__ == "__main__":
     generate_simple_urdf(joint_positions, "setup/urdf/robot_simple.urdf")
     print("robot_simple.urdf 생성 성공")
 
-    # setup/meshes/ 에 STL 파일이 있으면 메시 URDF, 없으면 박스 URDF 생성
-    # STL 파일 순서: base_link.stl, link1.stl, link2.stl, end_effector.stl
-    MESH_DIR = os.path.join(os.path.dirname(__file__), "meshes")
-    MESH_NAMES = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
-    stl_paths = []
-    for name in MESH_NAMES:
-        path = os.path.join(MESH_DIR, name)
-        if os.path.exists(path):
-            stl_paths.append(path)
+    MESH_DIR       = os.path.join(os.path.dirname(__file__), "meshes")
+    ASSEMBLED_STL  = os.path.join(MESH_DIR, "assembled.stl")
+    MESH_NAMES     = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
+    MESH_PATHS     = [os.path.join(MESH_DIR, n) for n in MESH_NAMES]
+
+    if os.path.exists(ASSEMBLED_STL):
+        # 조립된 STL → 링크별 자동 분리
+        print("assembled.stl 발견 → 링크별 자동 분리 시작")
+        split_stl_components(ASSEMBLED_STL, MESH_DIR)
+
+    stl_paths = [p for p in MESH_PATHS if os.path.exists(p)]
 
     if stl_paths:
-        print(f"STL 파일 {len(stl_paths)}개 발견 → 메시 URDF 생성")
+        print(f"\nSTL {len(stl_paths)}개로 메시 URDF 생성")
     else:
-        print("setup/meshes/ 에 STL 없음 → 박스 지오메트리로 생성")
-        print("  STL 파일을 아래 이름으로 넣으면 실제 형상이 표시됩니다:")
-        for name in MESH_NAMES:
-            print(f"    setup/meshes/{name}")
+        print("\nsetup/meshes/ 에 STL 없음 → 박스 지오메트리로 생성")
+        print("  실제 형상을 보려면 아래 중 하나:")
+        print("    1) setup/meshes/assembled.stl  ← 조립된 STL 하나 (자동 분리)")
+        print("    2) setup/meshes/base_link.stl, link1.stl, link2.stl, end_effector.stl")
 
     generate_full_urdf(stl_paths, joint_positions, "setup/urdf/robot_full.urdf")
     print("robot_full.urdf 생성 성공")

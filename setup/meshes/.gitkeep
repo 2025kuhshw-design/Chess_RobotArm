@@ -1,11 +1,6 @@
-# 3D프린터 출력용 STL 파일을 여기에 넣으세요.
-# 파일명 규칙 (순서 중요):
-#   base_link.stl      — 베이스/어깨 서보 링크
-#   link1.stl          — 상완 (L1=140mm)
-#   link2.stl          — 전완 (L2=155mm)
-#   end_effector.stl   — 흡착기 브래킷 (L3=75mm)
+# STL 파일을 여기에 넣은 뒤 python setup/stl_to_urdf.py 실행
 #
-# 파일을 넣은 뒤 아래 명령으로 robot_full.urdf 재생성:
-#   python setup/stl_to_urdf.py
+# 방법 1 (조립된 STL 하나): assembled.stl 을 넣으면 자동으로 링크별 분리
+# 방법 2 (부품별):          base_link.stl / link1.stl / link2.stl / end_effector.stl
 #
 # STL 단위: mm (URDF에서 scale="0.001 0.001 0.001" 자동 적용)
