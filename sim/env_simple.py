@@ -24,8 +24,7 @@ URDF_PATH    = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "r
 L1, L2, L3  = 0.140, 0.155, 0.075   # 실측값 (m)
 MAX_STEPS    = 150
 DELTA_LIMIT  = 0.2        # 보정 델타 최대값 (rad)
-REACH_GOOD   = 0.02       # 도달 인정 거리 (m) → +100
-REACH_FINE    = 0.020     # 정밀 도달 거리 (m) → +200  ※ 2cm (노이즈 하한보다 크게)
+REACH_FINE    = 0.020     # 종료 임계값 (m): 2cm 도달 시 에피소드 성공 종료
 TORQUE_LIMIT  = 1.27      # N·m
 TAU_OBS_LIMIT = 3.0       # 관측값 토크 클리핑 범위 (N·m) — observation_space 및 main.py 공유
 
@@ -221,22 +220,17 @@ class ChessArmEnvSimple(gym.Env):
         self._set_joint_angles(q_real)
         self._step_count += 1
 
-        # 보상 계산 (거리 기반 연속 보상 + 단계별 보너스)
+        # 보상 계산
+        # 연속 거리 패널티 (밀도 있는 학습 신호)
         reward = -dist * 20.0
 
-        if dist < 0.10:
-            reward += 10.0
-        if dist < 0.05:
-            reward += 30.0
-        if dist < REACH_GOOD:
-            reward += 100.0
-        if dist < REACH_FINE:
-            reward += 200.0
-
-        # 이전 스텝보다 가까워졌으면 추가 보상
+        # 진행 보너스 (목표에 가까워질수록 +)
         if dist < self._prev_dist:
-            reward += 5.0
+            reward += 3.0
         self._prev_dist = dist
+
+        # 스텝 패널티: 빨리 도달할수록 유리하게 → 목표 근처 맴돌기(hover) 방지
+        reward -= 0.5
 
         # 라그랑주 토크 한계 페널티
         if np.any(np.abs(self._tau) > SERVO_LIMIT):
@@ -245,6 +239,11 @@ class ChessArmEnvSimple(gym.Env):
 
         terminated = dist < REACH_FINE
         truncated  = self._step_count >= MAX_STEPS
+
+        # 목표 도달 시 대형 종료 보너스 + 남은 스텝 비례 속도 보너스
+        # → 종료 > 맴돌기 수익 구조로 보상 해킹 차단
+        if terminated:
+            reward += 300.0 + (MAX_STEPS - self._step_count) * 3.0
 
         info = {"dist_m": dist, "dist_cm": dist * 100, "target": self._target_xyz}
         obs  = self._get_obs()
