@@ -78,6 +78,8 @@ class ChessArmEnvSimple(gym.Env):
         self._noise_scale     = 0.0
         self._friction        = 0.0
         self._prev_dist       = float("inf")
+        self._slow_render     = True   # S키 토글 상태 (에피소드 간 유지)
+        self._s_was_down      = False  # S키 엣지 감지용
 
         self._init_pybullet()
 
@@ -247,8 +249,7 @@ class ChessArmEnvSimple(gym.Env):
             self._p.resetBasePositionAndOrientation(
                 self._target_body, self._target_xyz.tolist(), [0, 0, 0, 1]
             )
-        self._slow_render = True   # reset 시마다 slow 모드 유지
-        self._s_was_down  = False  # S키 엣지 감지용
+        self._s_was_down = False  # S키 엣지 감지 초기화
 
         self._set_joint_angles(self._q_real)
 

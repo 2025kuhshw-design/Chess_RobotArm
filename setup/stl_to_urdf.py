@@ -106,12 +106,14 @@ def _write_stl_binary(triangles: list, path: str) -> None:
 
 
 def split_stl_components(stl_path: str, output_dir: str,
-                         link_names: list = None) -> list:
+                         link_names: list = None) -> tuple:
     """
     조립된 STL을 연결 컴포넌트별로 분리해 링크별 STL로 저장.
     Z 중심 오름차순 정렬 → base_link(최하단) … end_effector(최상단) 순.
+    각 메시는 하단-중심을 원점(0,0,0)으로 정렬하여 저장 → URDF 이중 오프셋 방지.
 
-    반환: 저장된 STL 경로 리스트
+    반환: (저장된 STL 경로 리스트, 관절 위치 리스트 [m])
+           관절 위치 = 각 컴포넌트의 조립 좌표계 상 하단-중심 위치 (m 단위)
     """
     if link_names is None:
         link_names = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
@@ -154,19 +156,41 @@ def split_stl_components(stl_path: str, output_dir: str,
 
     sorted_comps = sorted(comps.values(), key=z_center)
 
-    # 저장
+    # 저장 + 메시 원점 정렬
     os.makedirs(output_dir, exist_ok=True)
-    saved = []
-    for i, tris in enumerate(sorted_comps):
+    saved           = []
+    attach_pts_m    = []   # 조립 좌표계에서 각 컴포넌트 하단-중심 (m 단위)
+
+    for i, tris in enumerate(sorted_comps[:len(link_names)]):
+        # 모든 정점 수집
+        all_verts = np.array([v for _, v0, v1, v2 in tris for v in [v0, v1, v2]],
+                             dtype=np.float64)
+        # 하단-중심 = (X 평균, Y 평균, Z 최솟값) → 관절 연결점
+        attach = np.array([all_verts[:, 0].mean(),
+                           all_verts[:, 1].mean(),
+                           all_verts[:, 2].min()], dtype=np.float64)
+        attach_pts_m.append((attach * 0.001).tolist())   # mm → m
+
+        # 정점을 하단-중심 기준으로 평행이동 (원점 정렬)
+        centered_tris = []
+        for normal, v0, v1, v2 in tris:
+            centered_tris.append((
+                normal,
+                tuple(np.array(v0) - attach),
+                tuple(np.array(v1) - attach),
+                tuple(np.array(v2) - attach),
+            ))
+
         name = link_names[i] if i < len(link_names) else f"part{i}.stl"
         out  = os.path.join(output_dir, name)
-        _write_stl_binary(tris, out)
+        _write_stl_binary(centered_tris, out)
         bb   = stl_bounding_box(out)
         print(f"  [{i}] {name}: {len(tris):,}삼각형, "
-              f"크기 {[round(s,1) for s in bb['size_mm']]} mm")
+              f"크기 {[round(s,1) for s in bb['size_mm']]} mm, "
+              f"조립 하단 {[round(v*1000,1) for v in attach_pts_m[-1]]} mm")
         saved.append(out)
 
-    return saved
+    return saved, attach_pts_m
 
 
 # ─────────────────────────────────────────
