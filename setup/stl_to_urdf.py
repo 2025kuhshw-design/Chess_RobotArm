@@ -275,6 +275,23 @@ if __name__ == "__main__":
     generate_simple_urdf(joint_positions, "setup/urdf/robot_simple.urdf")
     print("robot_simple.urdf 생성 성공")
 
-    # STL 없이 구조만 확인하는 풀 URDF (stl_paths 빈 리스트)
-    generate_full_urdf([], joint_positions, "setup/urdf/robot_full.urdf")
+    # setup/meshes/ 에 STL 파일이 있으면 메시 URDF, 없으면 박스 URDF 생성
+    # STL 파일 순서: base_link.stl, link1.stl, link2.stl, end_effector.stl
+    MESH_DIR = os.path.join(os.path.dirname(__file__), "meshes")
+    MESH_NAMES = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
+    stl_paths = []
+    for name in MESH_NAMES:
+        path = os.path.join(MESH_DIR, name)
+        if os.path.exists(path):
+            stl_paths.append(path)
+
+    if stl_paths:
+        print(f"STL 파일 {len(stl_paths)}개 발견 → 메시 URDF 생성")
+    else:
+        print("setup/meshes/ 에 STL 없음 → 박스 지오메트리로 생성")
+        print("  STL 파일을 아래 이름으로 넣으면 실제 형상이 표시됩니다:")
+        for name in MESH_NAMES:
+            print(f"    setup/meshes/{name}")
+
+    generate_full_urdf(stl_paths, joint_positions, "setup/urdf/robot_full.urdf")
     print("robot_full.urdf 생성 성공")
