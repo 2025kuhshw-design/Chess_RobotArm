@@ -51,10 +51,17 @@ class ChessArmEnvSimple(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"]}
 
-    def __init__(self, render_mode=None, urdf_path=None):
+    def __init__(self, render_mode=None, urdf_path=None, vis_port=None):
         super().__init__()
         self.render_mode = render_mode
         self.urdf_path   = urdf_path or os.path.abspath(URDF_PATH)
+
+        # vis_port 지정 시 UE 시각화 소켓 활성화 (None이면 비활성, 속도 영향 없음)
+        if vis_port is not None:
+            from sim.vis_socket import VisSocket
+            self._vis = VisSocket(port=vis_port)
+        else:
+            self._vis = None
 
         self.observation_space = spaces.Box(
             low  = np.array([-math.pi]*3 + [-OBS_Q_LIMIT]*3 + [-1.0, -1.0, 0.0] + [-TAU_OBS_LIMIT]*3, dtype=np.float32),
@@ -245,6 +252,10 @@ class ChessArmEnvSimple(gym.Env):
         if terminated:
             reward += 300.0 + (MAX_STEPS - self._step_count) * 3.0
 
+        # UE 시각화 소켓 송신 (연결 없으면 즉시 무시)
+        if self._vis is not None:
+            self._vis.send(self._q_real, self._target_xyz, self._step_count)
+
         info = {"dist_m": dist, "dist_cm": dist * 100, "target": self._target_xyz}
         obs  = self._get_obs()
         return obs, reward, terminated, truncated, info
@@ -262,6 +273,9 @@ class ChessArmEnvSimple(gym.Env):
             return np.array(rgb)[:, :, :3]
 
     def close(self):
+        if self._vis is not None:
+            self._vis.close()
+            self._vis = None
         if self._pybullet_client is not None:
             self._p.disconnect(self._pybullet_client)
             self._pybullet_client = None

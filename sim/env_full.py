@@ -28,9 +28,9 @@ class ChessArmEnvFull(ChessArmEnvSimple):
     1단계 환경 상속 → URDF + Domain Randomization 범위만 교체.
     """
 
-    def __init__(self, render_mode=None, urdf_path=None):
+    def __init__(self, render_mode=None, urdf_path=None, vis_port=None):
         full_path = urdf_path or os.path.abspath(URDF_FULL_PATH)
-        super().__init__(render_mode=render_mode, urdf_path=full_path)
+        super().__init__(render_mode=render_mode, urdf_path=full_path, vis_port=vis_port)
 
     # ─────────────────────────────────────────
     # DR 파라미터 오버라이드 (reset() 호출 전에 실행됨)
