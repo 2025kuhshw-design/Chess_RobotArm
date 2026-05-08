@@ -19,7 +19,7 @@ from sim.env_simple import REACH_FINE
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
-STAGE1_STEPS    = 3_000_000
+STAGE1_STEPS    = 5_000_000
 STAGE2_STEPS    = 1_500_000
 N_ENVS          = 4           # 병렬 환경 수 (샘플 다양성 ↑)
 N_STEPS         = 2048        # 환경당 롤아웃 길이
@@ -215,6 +215,11 @@ def train_stage1(model_dir: str) -> str:
         model         = PPO.load(ckpt_path, env=env)
         trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
         remaining     = max(0, STAGE1_STEPS - trained_steps)
+        # PPO.load()는 저장 당시 하이퍼파라미터를 복원하므로 새 값으로 강제 덮어쓰기
+        from stable_baselines3.common.utils import get_schedule_fn
+        model.learning_rate = linear_schedule(3e-4)
+        model.lr_schedule   = get_schedule_fn(model.learning_rate)
+        model.ent_coef      = ENT_COEF_S1
     else:
         print("[새로 학습 시작]")
         model = PPO(
@@ -271,11 +276,18 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
         model         = PPO.load(ckpt_path, env=env)
         trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
         remaining     = max(0, STAGE2_STEPS - trained_steps)
+        from stable_baselines3.common.utils import get_schedule_fn
+        model.learning_rate = linear_schedule(3e-4)
+        model.lr_schedule   = get_schedule_fn(model.learning_rate)
+        model.ent_coef      = ENT_COEF_S2
     else:
         print(f"[1단계 모델 로드] {stage1_path}")
         model           = PPO.load(stage1_path, env=env)
-        model.ent_coef  = ENT_COEF_S2   # 수렴 단계: 탐색 줄임
-        remaining       = STAGE2_STEPS
+        from stable_baselines3.common.utils import get_schedule_fn
+        model.learning_rate = linear_schedule(3e-4)
+        model.lr_schedule   = get_schedule_fn(model.learning_rate)
+        model.ent_coef      = ENT_COEF_S2
+        remaining           = STAGE2_STEPS
 
     callbacks = CallbackList([
         make_checkpoint_callback(model_dir, "stage2", env),
