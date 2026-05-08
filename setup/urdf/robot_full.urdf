@@ -14,9 +14,9 @@
       <origin xyz="0 0 0.0700" rpy="0 0 0"/>
     </collision>
     <inertial>
-      <mass value="0.3"/>
+      <mass value="0.12"/>
       <origin xyz="0 0 0.0700" rpy="0 0 0"/>
-      <inertia ixx="0.000530" ixy="0" ixz="0" iyy="0.000530" iyz="0" izz="0.000080"/>
+      <inertia ixx="0.000212" ixy="0" ixz="0" iyy="0.000212" iyz="0" izz="0.000032"/>
     </inertial>
   </link>
   <link name="link1">
@@ -33,9 +33,9 @@
       <origin xyz="0 0 0.0775" rpy="0 0 0"/>
     </collision>
     <inertial>
-      <mass value="0.2"/>
+      <mass value="0.08"/>
       <origin xyz="0 0 0.0775" rpy="0 0 0"/>
-      <inertia ixx="0.000427" ixy="0" ixz="0" iyy="0.000427" iyz="0" izz="0.000053"/>
+      <inertia ixx="0.000171" ixy="0" ixz="0" iyy="0.000171" iyz="0" izz="0.000021"/>
     </inertial>
   </link>
   <link name="link2">
@@ -52,9 +52,9 @@
       <origin xyz="0 0 0.0375" rpy="0 0 0"/>
     </collision>
     <inertial>
-      <mass value="0.1"/>
+      <mass value="0.04"/>
       <origin xyz="0 0 0.0375" rpy="0 0 0"/>
-      <inertia ixx="0.000060" ixy="0" ixz="0" iyy="0.000060" iyz="0" izz="0.000027"/>
+      <inertia ixx="0.000024" ixy="0" ixz="0" iyy="0.000024" iyz="0" izz="0.000011"/>
     </inertial>
   </link>
   <link name="end_effector">
@@ -81,20 +81,20 @@
     <child link="link1"/>
     <origin xyz="0 0 0.1400" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <limit lower="-3.14" upper="3.14" effort="1.27" velocity="1.0"/>
+    <limit lower="-3.14" upper="3.14" effort="1.27" velocity="6.0"/>
   </joint>
   <joint name="joint2" type="revolute">
     <parent link="link1"/>
     <child link="link2"/>
     <origin xyz="0 0 0.1550" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.2" upper="1.2" effort="1.27" velocity="1.0"/>
+    <limit lower="-1.2" upper="1.2" effort="1.27" velocity="6.0"/>
   </joint>
   <joint name="joint3" type="revolute">
     <parent link="link2"/>
     <child link="end_effector"/>
     <origin xyz="0 0 0.0750" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.5" upper="1.5" effort="1.27" velocity="1.0"/>
+    <limit lower="-1.5" upper="1.5" effort="1.27" velocity="6.0"/>
   </joint>
 </robot>

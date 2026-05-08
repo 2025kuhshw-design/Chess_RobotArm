@@ -200,6 +200,13 @@ def _link_length(p1, p2) -> float:
     return math.sqrt(sum((a - b)**2 for a, b in zip(p1, p2)))
 
 
+def _cylinder_inertia(m, r, h) -> tuple:
+    ixx = m / 12.0 * (3 * r**2 + h**2)
+    iyy = ixx
+    izz = m / 2.0 * r**2
+    return ixx, iyy, izz
+
+
 def _box_inertia(m, sx, sy, sz) -> tuple:
     ixx = m / 12.0 * (sy**2 + sz**2)
     iyy = m / 12.0 * (sx**2 + sz**2)
@@ -207,10 +214,22 @@ def _box_inertia(m, sx, sy, sz) -> tuple:
     return ixx, iyy, izz
 
 
+# 링크별 시각 색상 (rgba) — 발표/보고서용
+_LINK_COLORS = [
+    [0.25, 0.25, 0.30, 1.0],   # base_link: 다크 그레이
+    [0.18, 0.52, 0.80, 1.0],   # link1:     파랑
+    [0.20, 0.70, 0.40, 1.0],   # link2:     초록
+    [0.90, 0.40, 0.15, 1.0],   # end_effector: 주황
+]
+# 관절 구 반지름
+JOINT_SPHERE_R = 0.018
+LINK_RADIUS    = 0.012   # 실린더 반지름
+
+
 def generate_simple_urdf(joint_positions: list, output_path: str) -> None:
     """
     joint_positions: [[x0,y0,z0], [x1,y1,z1], ...]  (월드 좌표, m 단위)
-    인접 관절 간 거리를 링크 길이로 사용해 box 링크 URDF 생성.
+    링크: 실린더 + 관절 구 조합으로 깔끔한 로봇팔 외형 생성.
     """
     n_links = len(joint_positions) - 1
     link_names  = ["base_link"] + [f"link{i+1}" for i in range(n_links - 1)] + ["end_effector"]
@@ -218,27 +237,30 @@ def generate_simple_urdf(joint_positions: list, output_path: str) -> None:
 
     lines = ['<?xml version="1.0"?>', '<robot name="chess_arm">']
 
-    # ── 링크 생성 ──
+    # ── 링크 생성 (실린더 시각) ──
     for i, lname in enumerate(link_names):
-        if i < n_links:
-            length = _link_length(joint_positions[i], joint_positions[i + 1])
-        else:
-            length = 0.05
-        mass = LINK_MASSES[i] if i < len(LINK_MASSES) else 0.05
-        w    = LINK_WIDTH
-        ixx, iyy, izz = _box_inertia(mass, w, w, length)
+        length = _link_length(joint_positions[i], joint_positions[i + 1]) if i < n_links else 0.03
+        mass   = LINK_MASSES[i] if i < len(LINK_MASSES) else 0.03
+        r      = LINK_RADIUS
+        rgba   = _LINK_COLORS[i] if i < len(_LINK_COLORS) else [0.6, 0.6, 0.6, 1.0]
+        rgba_s = " ".join(f"{v:.2f}" for v in rgba)
+        ixx, iyy, izz = _cylinder_inertia(mass, r, length)
 
+        # 실린더: PyBullet은 Z축 방향 기본 → origin z=length/2 로 하단 정렬
         lines += [
             f'  <link name="{lname}">',
             "    <visual>",
             "      <geometry>",
-            f'        <box size="{w:.4f} {w:.4f} {length:.4f}"/>',
+            f'        <cylinder radius="{r:.4f}" length="{length:.4f}"/>',
             "      </geometry>",
             f'      <origin xyz="0 0 {length/2:.4f}" rpy="0 0 0"/>',
+            f'      <material name="color_{lname}">',
+            f'        <color rgba="{rgba_s}"/>',
+            "      </material>",
             "    </visual>",
             "    <collision>",
             "      <geometry>",
-            f'        <box size="{w:.4f} {w:.4f} {length:.4f}"/>',
+            f'        <cylinder radius="{r:.4f}" length="{length:.4f}"/>',
             "      </geometry>",
             f'      <origin xyz="0 0 {length/2:.4f}" rpy="0 0 0"/>',
             "    </collision>",
@@ -248,6 +270,33 @@ def generate_simple_urdf(joint_positions: list, output_path: str) -> None:
             f'      <inertia ixx="{ixx:.6f}" ixy="0" ixz="0" iyy="{iyy:.6f}" iyz="0" izz="{izz:.6f}"/>',
             "    </inertial>",
             "  </link>",
+        ]
+        # 관절 위치 표시용 구 (더미 링크)
+        sphere_name = f"{lname}_joint_sphere"
+        s_mass = 0.001
+        s_r    = JOINT_SPHERE_R
+        lines += [
+            f'  <link name="{sphere_name}">',
+            "    <visual>",
+            "      <geometry>",
+            f'        <sphere radius="{s_r:.4f}"/>',
+            "      </geometry>",
+            '      <origin xyz="0 0 0" rpy="0 0 0"/>',
+            '      <material name="joint_color">',
+            '        <color rgba="0.95 0.80 0.10 1.0"/>',
+            "      </material>",
+            "    </visual>",
+            "    <inertial>",
+            f'      <mass value="{s_mass}"/>',
+            '      <origin xyz="0 0 0" rpy="0 0 0"/>',
+            f'      <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>',
+            "    </inertial>",
+            "  </link>",
+            f'  <joint name="sphere_joint_{lname}" type="fixed">',
+            f'    <parent link="{lname}"/>',
+            f'    <child link="{sphere_name}"/>',
+            '    <origin xyz="0 0 0" rpy="0 0 0"/>',
+            "  </joint>",
         ]
 
     # ── 관절 생성 ──
