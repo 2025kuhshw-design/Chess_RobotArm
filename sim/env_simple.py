@@ -170,7 +170,7 @@ class ChessArmEnvSimple(gym.Env):
     # env_full에서 오버라이드하여 더 넓은 범위 적용
     # ─────────────────────────────────────────
     def _set_dr_params(self):
-        self._noise_scale = np.random.uniform(abs(NOISE_LOW), NOISE_HIGH)
+        self._noise_scale = np.random.uniform(0.0, NOISE_HIGH)
         self._friction    = np.random.uniform(FRICTION_LOW, FRICTION_HIGH)
 
     # ─────────────────────────────────────────

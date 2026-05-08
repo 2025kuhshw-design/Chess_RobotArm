@@ -35,7 +35,7 @@ class ChessArmEnvFull(ChessArmEnvSimple):
     # 링크 질량 랜덤화 포함
     # ─────────────────────────────────────────
     def _set_dr_params(self):
-        self._noise_scale = np.random.uniform(abs(NOISE_LOW_FULL), NOISE_HIGH_FULL)
+        self._noise_scale = np.random.uniform(0.0, NOISE_HIGH_FULL)
         self._friction    = np.random.uniform(FRICTION_LOW_FULL, FRICTION_HIGH_FULL)
         self._randomize_link_masses()
 
