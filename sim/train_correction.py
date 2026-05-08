@@ -84,7 +84,9 @@ def find_latest_checkpoint(model_dir: str, prefix: str) -> str | None:
 def _make_env(env_class, rank: int):
     def _init():
         from stable_baselines3.common.monitor import Monitor
-        return Monitor(env_class())
+        env = Monitor(env_class())
+        env.reset(seed=rank)
+        return env
     return _init
 
 
@@ -201,13 +203,12 @@ def train_stage1(model_dir: str) -> str:
     ckpt_path = find_latest_checkpoint(model_dir, "stage1")
     env       = load_vec_env(ChessArmEnvSimple, N_ENVS, norm_path)
 
+    from stable_baselines3.common.utils import get_schedule_fn
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
-        model         = PPO.load(ckpt_path, env=env)
-        trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
-        remaining     = max(0, STAGE1_STEPS - trained_steps)
+        model = PPO.load(ckpt_path, env=env)
         # PPO.load()는 저장 당시 하이퍼파라미터를 복원하므로 새 값으로 강제 덮어쓰기
-        from stable_baselines3.common.utils import get_schedule_fn
         model.learning_rate = linear_schedule(3e-4)
         model.lr_schedule   = get_schedule_fn(model.learning_rate)
         model.ent_coef      = ENT_COEF_S1
@@ -227,7 +228,8 @@ def train_stage1(model_dir: str) -> str:
             tensorboard_log = os.path.join(model_dir, "tb_logs"),
             verbose         = 1,
         )
-        remaining = STAGE1_STEPS
+
+    remaining = max(0, STAGE1_STEPS - model.num_timesteps)
 
     callbacks = CallbackList([
         make_checkpoint_callback(model_dir, "stage1", env),
@@ -237,7 +239,8 @@ def train_stage1(model_dir: str) -> str:
 
     try:
         if remaining > 0:
-            model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
+            # total_timesteps = 절대 목표값: num_timesteps가 STAGE1_STEPS에 도달할 때까지 학습
+            model.learn(total_timesteps=STAGE1_STEPS, callback=callbacks, reset_num_timesteps=False)
 
         save_path = os.path.join(model_dir, "stage1_final")
         model.save(save_path)
@@ -261,27 +264,28 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
     print("2단계 학습 시작 (env_full, Domain Randomization)")
     print("="*50)
 
+    # 2단계 절대 목표 스텝 = 1단계 종료 시점 + 2단계 추가 스텝
+    # model.num_timesteps는 stage1 완료 후 STAGE1_STEPS이므로 이 기준으로 remaining 계산
+    total_target = STAGE1_STEPS + STAGE2_STEPS
+
     norm_path = os.path.join(model_dir, "stage2_vecnorm.pkl")
     ckpt_path = find_latest_checkpoint(model_dir, "stage2")
     env       = load_vec_env(ChessArmEnvFull, N_ENVS, norm_path)
 
+    from stable_baselines3.common.utils import get_schedule_fn
+
     if ckpt_path:
         print(f"[체크포인트 발견] 이어서 학습: {ckpt_path}")
-        model         = PPO.load(ckpt_path, env=env)
-        trained_steps = int(os.path.basename(ckpt_path).split("_")[-2])
-        remaining     = max(0, STAGE2_STEPS - trained_steps)
-        from stable_baselines3.common.utils import get_schedule_fn
-        model.learning_rate = linear_schedule(3e-4)
-        model.lr_schedule   = get_schedule_fn(model.learning_rate)
-        model.ent_coef      = ENT_COEF_S2
+        model = PPO.load(ckpt_path, env=env)
     else:
         print(f"[1단계 모델 로드] {stage1_path}")
-        model           = PPO.load(stage1_path, env=env)
-        from stable_baselines3.common.utils import get_schedule_fn
-        model.learning_rate = linear_schedule(3e-4)
-        model.lr_schedule   = get_schedule_fn(model.learning_rate)
-        model.ent_coef      = ENT_COEF_S2
-        remaining           = STAGE2_STEPS
+        model = PPO.load(stage1_path, env=env)
+
+    model.learning_rate = linear_schedule(3e-4)
+    model.lr_schedule   = get_schedule_fn(model.learning_rate)
+    model.ent_coef      = ENT_COEF_S2
+    # model.num_timesteps 기준으로 남은 스텝 계산 (절대값 비교)
+    remaining = max(0, total_target - model.num_timesteps)
 
     callbacks = CallbackList([
         make_checkpoint_callback(model_dir, "stage2", env),
@@ -291,7 +295,8 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
 
     try:
         if remaining > 0:
-            model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
+            # total_timesteps = 절대 목표값: 1단계 이어서 total_target에 도달할 때까지 학습
+            model.learn(total_timesteps=total_target, callback=callbacks, reset_num_timesteps=False)
 
         save_path = os.path.join(model_dir, "stage2_final")
         model.save(save_path)
