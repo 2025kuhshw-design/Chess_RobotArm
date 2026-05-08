@@ -97,8 +97,10 @@ class ChessArmEnvSimple(gym.Env):
         if self.render_mode == "human" and not ChessArmEnvSimple._gui_open:
             self._pybullet_client = p.connect(p.GUI)
             ChessArmEnvSimple._gui_open = True
+            self._is_gui = True   # 실제 GUI 창을 가진 env만 True
         else:
             self._pybullet_client = p.connect(p.DIRECT)
+            self._is_gui = False
 
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.81)
@@ -116,7 +118,7 @@ class ChessArmEnvSimple(gym.Env):
         self._n_joints  = p.getNumJoints(self._robot_id)
         self._target_body = None
 
-        if self.render_mode == "human":
+        if self._is_gui:
             self._setup_visualization()
 
     # ─────────────────────────────────────────
@@ -250,8 +252,8 @@ class ChessArmEnvSimple(gym.Env):
         self._step_count  = 0
         self._prev_dist   = float("inf")
 
-        # 목표 마커를 새 위치로 이동
-        if self._target_body is not None:
+        # 목표 마커를 새 위치로 이동 (GUI env만)
+        if self._is_gui and self._target_body is not None:
             self._p.resetBasePositionAndOrientation(
                 self._target_body, self._target_xyz.tolist(), [0, 0, 0, 1]
             )
@@ -321,7 +323,7 @@ class ChessArmEnvSimple(gym.Env):
         if terminated:
             reward += 300.0 + (MAX_STEPS - self._step_count) * 3.0
 
-        if self.render_mode == "human":
+        if self._is_gui:  # GUI 창이 있는 env[0]만 처리 (나머지는 풀속도 유지)
             self._handle_keys()
             if self._slow_render:
                 time.sleep(0.02)  # ~50fps
