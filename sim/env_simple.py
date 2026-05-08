@@ -6,6 +6,7 @@ Sim-to-Real 오차 보정 정책 학습
 import os
 import sys
 import math
+import time
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -110,7 +111,46 @@ class ChessArmEnvSimple(gym.Env):
             generate_simple_urdf(joint_positions, self.urdf_path)
             self._robot_id = p.loadURDF(self.urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
 
-        self._n_joints = p.getNumJoints(self._robot_id)
+        self._n_joints  = p.getNumJoints(self._robot_id)
+        self._target_body = None
+
+        if self.render_mode == "human":
+            self._setup_visualization()
+
+    # ─────────────────────────────────────────
+    # 시각화 초기 설정 (GUI 모드 전용)
+    # ─────────────────────────────────────────
+    def _setup_visualization(self):
+        p = self._p
+
+        # 체스판 위를 내려다보는 시점
+        p.resetDebugVisualizerCamera(
+            cameraDistance    = 0.75,
+            cameraYaw         = 30,
+            cameraPitch       = -50,
+            cameraTargetPosition = [0.2, 0.0, 0.05],
+        )
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)  # 좌측 패널 숨김
+
+        # 체스판 64칸 그리기
+        for row in range(8):
+            for col in range(8):
+                x = BOARD_ORIGIN_X + col * CELL_SIZE + CELL_SIZE / 2
+                y = BOARD_ORIGIN_Y + row * CELL_SIZE + CELL_SIZE / 2
+                color = ([0.95, 0.90, 0.75, 1] if (row + col) % 2 == 0
+                         else [0.35, 0.18, 0.05, 1])
+                vis = p.createVisualShape(
+                    p.GEOM_BOX,
+                    halfExtents=[CELL_SIZE * 0.49, CELL_SIZE * 0.49, 0.002],
+                    rgbaColor=color,
+                )
+                p.createMultiBody(0, -1, vis, [x, y, 0.001])
+
+        # 목표 위치 마커 (빨간 구)
+        target_vis = p.createVisualShape(
+            p.GEOM_SPHERE, radius=0.008, rgbaColor=[1, 0.1, 0.1, 0.9]
+        )
+        self._target_body = p.createMultiBody(0, -1, target_vis, [0, 0, 0])
 
     # ─────────────────────────────────────────
     # DR 파라미터 설정 (에피소드마다 갱신)
@@ -202,6 +242,12 @@ class ChessArmEnvSimple(gym.Env):
         self._step_count  = 0
         self._prev_dist   = float("inf")
 
+        # 목표 마커를 새 위치로 이동
+        if self._target_body is not None:
+            self._p.resetBasePositionAndOrientation(
+                self._target_body, self._target_xyz.tolist(), [0, 0, 0, 1]
+            )
+
         self._set_joint_angles(self._q_real)
 
         obs = self._get_obs()
@@ -247,6 +293,9 @@ class ChessArmEnvSimple(gym.Env):
         # → 종료 > 맴돌기 수익 구조로 보상 해킹 차단
         if terminated:
             reward += 300.0 + (MAX_STEPS - self._step_count) * 3.0
+
+        if self.render_mode == "human":
+            time.sleep(0.02)  # ~50fps로 속도 제한 (없으면 너무 빠름)
 
         info = {"dist_m": dist, "dist_cm": dist * 100, "target": self._target_xyz}
         obs  = self._get_obs()
