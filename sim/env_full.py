@@ -12,12 +12,12 @@ from sim.env_simple import ChessArmEnvSimple
 # ─────────────────────────────────────────
 URDF_FULL_PATH  = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_full.urdf")
 
-NOISE_LOW_FULL    = -0.08
-NOISE_HIGH_FULL   =  0.08
+NOISE_LOW_FULL    = -0.05      # 1단계(±0.03)보다 넓은 DR, 관절당 최대 ~3.3cm 오차
+NOISE_HIGH_FULL   =  0.05
 DELAY_LOW_FULL    =  0.0
 DELAY_HIGH_FULL   =  0.05
 FRICTION_LOW_FULL =  0.01
-FRICTION_HIGH_FULL=  0.30
+FRICTION_HIGH_FULL=  0.12      # 1단계(0.08)보다 넓은 DR, REACH_FINE=2cm 달성 가능 상한
 MASS_VARIATION    =  0.20   # ±20%
 
 BASE_MASSES = [0.12, 0.08, 0.04]  # 링크 기본 질량 (kg) — lagrange.py와 동기화
