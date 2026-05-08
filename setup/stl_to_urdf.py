@@ -374,7 +374,7 @@ if __name__ == "__main__":
     print("robot_simple.urdf 생성 성공")
 
     MESH_DIR       = os.path.join(os.path.dirname(__file__), "meshes")
-    ASSEMBLED_STL  = os.path.join(MESH_DIR, "assembled.stl")
+    ASSEMBLED_STL  = os.path.join(MESH_DIR, "robot arm-1 assembly.stl")
     MESH_NAMES     = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
     MESH_PATHS     = [os.path.join(MESH_DIR, n) for n in MESH_NAMES]
 

@@ -1,6 +1,6 @@
 # STL 파일을 여기에 넣은 뒤 python setup/stl_to_urdf.py 실행
 #
-# 방법 1 (조립된 STL 하나): assembled.stl 을 넣으면 자동으로 링크별 분리
+# 방법 1 (조립된 STL 하나): "robot arm-1 assembly.stl" 을 넣으면 자동으로 링크별 분리
 # 방법 2 (부품별):          base_link.stl / link1.stl / link2.stl / end_effector.stl
 #
 # STL 단위: mm (URDF에서 scale="0.001 0.001 0.001" 자동 적용)
