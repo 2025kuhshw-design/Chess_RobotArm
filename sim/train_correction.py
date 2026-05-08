@@ -328,6 +328,12 @@ if __name__ == "__main__":
     else:
         s1_path = args.stage1_model or os.path.join(model_dir, "stage1_final")
         if not os.path.exists(s1_path + ".zip"):
-            print("[경고] 1단계 모델 없음 → 1단계부터 자동 실행")
-            s1_path = train_stage1(model_dir)
+            # stage1_final 없으면 최신 체크포인트로 대체 (중간 중단 시 대비)
+            ckpt = find_latest_checkpoint(model_dir, "stage1")
+            if ckpt:
+                s1_path = ckpt[:-4]  # .zip 제거 (PPO.load 호환)
+                print(f"[stage1_final 없음] 최신 체크포인트로 대체: {ckpt}")
+            else:
+                print("[경고] 1단계 모델 없음 → 1단계부터 자동 실행")
+                s1_path = train_stage1(model_dir)
         train_stage2(s1_path, model_dir)
