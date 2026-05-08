@@ -154,6 +154,12 @@ class ChessArmEnvSimple(gym.Env):
         )
         self._target_body = p.createMultiBody(0, -1, target_vis, [0, 0, 0])
 
+        print("\n[조작법]")
+        print("  ← → ↑ ↓  : 카메라 회전 (마우스 왼쪽 드래그도 가능)")
+        print("  S         : 시뮬레이션 속도 ON/OFF (느림↔빠름)")
+        print("  마우스 우클릭 드래그: 카메라 패닝")
+        print("  마우스 스크롤: 줌인/아웃\n")
+
     # ─────────────────────────────────────────
     # DR 파라미터 설정 (에피소드마다 갱신)
     # env_full에서 오버라이드하여 더 넓은 범위 적용
@@ -257,6 +263,32 @@ class ChessArmEnvSimple(gym.Env):
         return obs, {}
 
     # ─────────────────────────────────────────
+    # GUI 키보드 처리 (S: 속도토글 / 화살표: 카메라 회전)
+    # ─────────────────────────────────────────
+    def _handle_keys(self):
+        p    = self._p
+        keys = p.getKeyboardEvents()
+
+        # S키: 속도 토글 (엣지 감지)
+        s_down = bool(keys.get(ord('s'), 0) & (p.KEY_WAS_TRIGGERED | p.KEY_IS_DOWN))
+        if s_down and not self._s_was_down:
+            self._slow_render = not self._slow_render
+            print(f"[렌더] 속도 제한: {'ON (느림)' if self._slow_render else 'OFF (빠름)'}")
+        self._s_was_down = s_down
+
+        # 화살표: 카메라 궤도 회전 (마우스 드래그 대체)
+        cam   = p.getDebugVisualizerCamera()
+        yaw, pitch, dist, target = cam[8], cam[9], cam[10], list(cam[11])
+        step  = 3.0
+        moved = False
+        if keys.get(p.B3G_LEFT_ARROW,  0) & p.KEY_IS_DOWN: yaw   -= step; moved = True
+        if keys.get(p.B3G_RIGHT_ARROW, 0) & p.KEY_IS_DOWN: yaw   += step; moved = True
+        if keys.get(p.B3G_UP_ARROW,    0) & p.KEY_IS_DOWN: pitch  = min(pitch + step, -5);  moved = True
+        if keys.get(p.B3G_DOWN_ARROW,  0) & p.KEY_IS_DOWN: pitch  = max(pitch - step, -89); moved = True
+        if moved:
+            p.resetDebugVisualizerCamera(dist, yaw, pitch, target)
+
+    # ─────────────────────────────────────────
     # step
     # ─────────────────────────────────────────
     def step(self, action):
@@ -273,18 +305,12 @@ class ChessArmEnvSimple(gym.Env):
         self._step_count += 1
 
         # 보상 계산
-        # 연속 거리 패널티 (밀도 있는 학습 신호)
         reward = -dist * 20.0
-
-        # 진행 보너스 (목표에 가까워질수록 +)
         if dist < self._prev_dist:
             reward += 3.0
         self._prev_dist = dist
+        reward -= 0.5  # 스텝 패널티 (맴돌기 방지)
 
-        # 스텝 패널티: 빨리 도달할수록 유리하게 → 목표 근처 맴돌기(hover) 방지
-        reward -= 0.5
-
-        # 라그랑주 토크 한계 페널티
         if np.any(np.abs(self._tau) > SERVO_LIMIT):
             excess = np.sum(np.maximum(np.abs(self._tau) - SERVO_LIMIT, 0))
             reward -= 30.0 + excess * 5.0
@@ -292,18 +318,11 @@ class ChessArmEnvSimple(gym.Env):
         terminated = dist < REACH_FINE
         truncated  = self._step_count >= MAX_STEPS
 
-        # 목표 도달 시 대형 종료 보너스 + 남은 스텝 비례 속도 보너스
-        # → 종료 > 맴돌기 수익 구조로 보상 해킹 차단
         if terminated:
             reward += 300.0 + (MAX_STEPS - self._step_count) * 3.0
 
         if self.render_mode == "human":
-            keys = self._p.getKeyboardEvents()
-            s_down = bool(keys.get(ord('s'), 0) & (self._p.KEY_WAS_TRIGGERED | self._p.KEY_IS_DOWN))
-            if s_down and not self._s_was_down:
-                self._slow_render = not self._slow_render
-                print(f"[렌더] 속도 제한: {'ON (느림)' if self._slow_render else 'OFF (빠름)'}")
-            self._s_was_down = s_down
+            self._handle_keys()
             if self._slow_render:
                 time.sleep(0.02)  # ~50fps
 
