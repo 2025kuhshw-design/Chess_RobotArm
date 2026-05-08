@@ -296,10 +296,13 @@ def generate_simple_urdf(joint_positions: list, output_path: str) -> None:
 # ─────────────────────────────────────────
 # 기능 3: STL 참조 URDF 생성 (2단계용)
 # ─────────────────────────────────────────
-def generate_full_urdf(stl_paths: list, joint_positions: list, output_path: str) -> None:
+def generate_full_urdf(stl_paths: list, joint_positions: list, output_path: str,
+                       mesh_centered: bool = False) -> None:
     """
-    stl_paths: STL 파일 경로 리스트 (링크 수와 동일)
-    joint_positions: 관절 좌표 리스트
+    stl_paths      : STL 파일 경로 리스트 (링크 수와 동일)
+    joint_positions: 관절 좌표 리스트 (절대 월드 좌표, m)
+    mesh_centered  : True면 각 메시가 이미 원점 정렬되어 있음
+                     → visual origin xyz="0 0 0" 사용 (이중 오프셋 방지)
     """
     n_links = len(joint_positions) - 1
     link_names  = ["base_link"] + [f"link{i+1}" for i in range(n_links - 1)] + ["end_effector"]
@@ -317,22 +320,25 @@ def generate_full_urdf(stl_paths: list, joint_positions: list, output_path: str)
         ixx, iyy, izz = _box_inertia(mass, w, w, length)
 
         stl_file = stl_paths[i] if i < len(stl_paths) else ""
-        mesh_line = (
+        has_mesh = bool(stl_file)
+        geom_line = (
             f'        <mesh filename="{stl_file}" scale="0.001 0.001 0.001"/>'
-            if stl_file else f'        <box size="{w:.4f} {w:.4f} {length:.4f}"/>'
+            if has_mesh else f'        <box size="{w:.4f} {w:.4f} {length:.4f}"/>'
         )
+        # 메시가 원점 정렬된 경우 추가 오프셋 불필요; 박스는 중심 오프셋 필요
+        vis_origin = "0 0 0" if (has_mesh and mesh_centered) else f"0 0 {length/2:.4f}"
 
         lines += [
             f'  <link name="{lname}">',
             "    <visual>",
             "      <geometry>",
-            mesh_line,
+            geom_line,
             "      </geometry>",
-            f'      <origin xyz="0 0 {length/2:.4f}" rpy="0 0 0"/>',
+            f'      <origin xyz="{vis_origin}" rpy="0 0 0"/>',
             "    </visual>",
             "    <collision>",
             "      <geometry>",
-            mesh_line,
+            f'        <box size="{w:.4f} {w:.4f} {length:.4f}"/>',
             "      </geometry>",
             f'      <origin xyz="0 0 {length/2:.4f}" rpy="0 0 0"/>',
             "    </collision>",
@@ -402,20 +408,33 @@ if __name__ == "__main__":
     MESH_NAMES     = ["base_link.stl", "link1.stl", "link2.stl", "end_effector.stl"]
     MESH_PATHS     = [os.path.join(MESH_DIR, n) for n in MESH_NAMES]
 
+    mesh_centered = False
     if os.path.exists(ASSEMBLED_STL):
-        # 조립된 STL → 링크별 자동 분리
+        # 조립된 STL → 링크별 자동 분리 (메시 원점 정렬 포함)
         print("assembled.stl 발견 → 링크별 자동 분리 시작")
-        split_stl_components(ASSEMBLED_STL, MESH_DIR)
-
-    stl_paths = [p for p in MESH_PATHS if os.path.exists(p)]
+        stl_paths, attach_pts_m = split_stl_components(ASSEMBLED_STL, MESH_DIR)
+        # STL에서 추출한 관절 위치로 교체 (하드코딩 값보다 우선)
+        if len(attach_pts_m) >= 4:
+            # 각 파트의 조립 좌표계 상 하단 위치를 Z 기준 관절 체인으로 재구성
+            # attach_pts_m[0] = base 하단 → 월드 원점으로 평행이동
+            base_z = attach_pts_m[0][2]
+            joint_positions = [[p[0], p[1], p[2] - base_z] for p in attach_pts_m]
+            joint_positions.append([joint_positions[-1][0],
+                                     joint_positions[-1][1],
+                                     joint_positions[-1][2] + 0.05])  # 끝단 +5cm
+            print(f"  STL 기반 관절 위치 (m): {[[round(v,3) for v in p] for p in joint_positions]}")
+        mesh_centered = True
+    else:
+        stl_paths = [p for p in MESH_PATHS if os.path.exists(p)]
 
     if stl_paths:
         print(f"\nSTL {len(stl_paths)}개로 메시 URDF 생성")
     else:
         print("\nsetup/meshes/ 에 STL 없음 → 박스 지오메트리로 생성")
         print("  실제 형상을 보려면 아래 중 하나:")
-        print("    1) setup/meshes/assembled.stl  ← 조립된 STL 하나 (자동 분리)")
+        print("    1) setup/meshes/robot arm-1 assembly.stl  ← 조립된 STL 하나 (자동 분리)")
         print("    2) setup/meshes/base_link.stl, link1.stl, link2.stl, end_effector.stl")
 
-    generate_full_urdf(stl_paths, joint_positions, "setup/urdf/robot_full.urdf")
+    generate_full_urdf(stl_paths, joint_positions, "setup/urdf/robot_full.urdf",
+                       mesh_centered=mesh_centered)
     print("robot_full.urdf 생성 성공")
