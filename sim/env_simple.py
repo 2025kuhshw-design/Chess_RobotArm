@@ -25,20 +25,20 @@ L1, L2, L3  = 0.140, 0.155, 0.075   # 실측값 (m)
 MAX_STEPS    = 150
 DELTA_LIMIT  = 0.2        # 보정 델타 최대값 (rad)
 REACH_GOOD   = 0.02       # 도달 인정 거리 (m) → +100
-REACH_FINE    = 0.010     # 정밀 도달 거리 (m) → +200  ※ 1cm (0.5cm는 수렴 불안정)
+REACH_FINE    = 0.020     # 정밀 도달 거리 (m) → +200  ※ 2cm (노이즈 하한보다 크게)
 TORQUE_LIMIT  = 1.27      # N·m
 TAU_OBS_LIMIT = 3.0       # 관측값 토크 클리핑 범위 (N·m) — observation_space 및 main.py 공유
 
-# q_real 관측값 범위: q_ik(±π) + action(±0.2) + noise(±0.05) + friction(0.15) → ±π + 0.4 여유
-OBS_Q_LIMIT  = math.pi + 0.5
+# q_real 관측값 범위: q_ik(±π) + action(±0.2) + noise(±0.03) + friction(0.08) → ±π + 0.35 여유
+OBS_Q_LIMIT  = math.pi + 0.4
 
-# Sim-to-Real Gap 노이즈 범위
-NOISE_LOW    = -0.05
-NOISE_HIGH   =  0.05
+# Sim-to-Real Gap 노이즈 범위 — MG996R 기준: 반복 정밀도 ±2° ≈ ±0.035rad
+NOISE_LOW    = -0.03      # ±1.7° (MG996R 반복 정밀도 이내)
+NOISE_HIGH   =  0.03
 DELAY_LOW    =  0.0
 DELAY_HIGH   =  0.03
 FRICTION_LOW =  0.01
-FRICTION_HIGH=  0.15
+FRICTION_HIGH=  0.08      # 데스크탑 서보 부하 마찰 현실적 상한
 
 
 class ChessArmEnvSimple(gym.Env):

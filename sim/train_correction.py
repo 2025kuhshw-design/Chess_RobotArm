@@ -1,6 +1,6 @@
 """
 RL 보정 모델 학습 스크립트 (PPO, stable-baselines3)
-1단계: env_simple → 3,000,000 스텝
+1단계: env_simple → 5,000,000 스텝
 2단계: env_full  → 1,500,000 스텝 (1단계 이어서)
 
 Google Colab A100 실행 지원:
@@ -86,15 +86,6 @@ def _make_env(env_class, rank: int):
         from stable_baselines3.common.monitor import Monitor
         return Monitor(env_class())
     return _init
-
-
-def make_vec_env(env_class, n_envs: int):
-    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-    venv = DummyVecEnv([_make_env(env_class, i) for i in range(n_envs)])
-    # norm_obs=False: 관측값이 이미 유계 → 정규화 불필요
-    # norm_reward=True: 보상 스케일 정규화로 학습 안정화
-    venv = VecNormalize(venv, norm_obs=False, norm_reward=True, clip_reward=10.0)
-    return venv
 
 
 def load_vec_env(env_class, n_envs: int, norm_path: str):
@@ -244,13 +235,16 @@ def train_stage1(model_dir: str) -> str:
         make_eval_callback(ChessArmEnvSimple, model_dir),
     ])
 
-    if remaining > 0:
-        model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
+    try:
+        if remaining > 0:
+            model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
 
-    save_path = os.path.join(model_dir, "stage1_final")
-    model.save(save_path)
-    env.save(norm_path)
-    env.close()
+        save_path = os.path.join(model_dir, "stage1_final")
+        model.save(save_path)
+        env.save(norm_path)
+    finally:
+        env.close()
+
     print(f"\n✅ 1단계 학습 완료: {save_path}")
     return save_path
 
@@ -295,13 +289,16 @@ def train_stage2(stage1_path: str, model_dir: str) -> str:
         make_eval_callback(ChessArmEnvFull, model_dir),
     ])
 
-    if remaining > 0:
-        model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
+    try:
+        if remaining > 0:
+            model.learn(total_timesteps=remaining, callback=callbacks, reset_num_timesteps=False)
 
-    save_path = os.path.join(model_dir, "stage2_final")
-    model.save(save_path)
-    env.save(norm_path)
-    env.close()
+        save_path = os.path.join(model_dir, "stage2_final")
+        model.save(save_path)
+        env.save(norm_path)
+    finally:
+        env.close()
+
     print(f"\n✅ 2단계 학습 완료: {save_path}")
     return save_path
 
