@@ -35,8 +35,6 @@ OBS_Q_LIMIT  = math.pi + 0.4
 # Sim-to-Real Gap 노이즈 범위 — MG996R 기준: 반복 정밀도 ±2° ≈ ±0.035rad
 NOISE_LOW    = -0.03      # ±1.7° (MG996R 반복 정밀도 이내)
 NOISE_HIGH   =  0.03
-DELAY_LOW    =  0.0
-DELAY_HIGH   =  0.03
 FRICTION_LOW =  0.01
 FRICTION_HIGH=  0.08      # 데스크탑 서보 부하 마찰 현실적 상한
 
@@ -253,7 +251,8 @@ class ChessArmEnvSimple(gym.Env):
         try:
             tau = required_torque(q_real, np.zeros(3), np.array([0.1, 0.1, 0.1]))
             return np.clip(tau, -TAU_OBS_LIMIT, TAU_OBS_LIMIT).astype(np.float32)
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] _compute_tau 실패 (q={np.round(q_real,3)}): {e}")
             return np.zeros(3, dtype=np.float32)
 
     def _get_obs(self):
@@ -367,6 +366,8 @@ class ChessArmEnvSimple(gym.Env):
 
     def close(self):
         if self._pybullet_client is not None:
+            if self._is_gui:
+                ChessArmEnvSimple._gui_open = False  # 다음 env 생성 시 GUI 재사용 허용
             self._p.disconnect(self._pybullet_client)
             self._pybullet_client = None
 
