@@ -51,6 +51,8 @@ class ChessArmEnvSimple(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"]}
 
+    _gui_open = False  # 프로세스 내 GUI 창은 하나만 허용
+
     def __init__(self, render_mode=None, urdf_path=None):
         super().__init__()
         self.render_mode = render_mode
@@ -89,8 +91,9 @@ class ChessArmEnvSimple(gym.Env):
             raise ImportError("pip install pybullet 을 먼저 실행하세요.")
 
         self._p = p
-        if self.render_mode == "human":
+        if self.render_mode == "human" and not ChessArmEnvSimple._gui_open:
             self._pybullet_client = p.connect(p.GUI)
+            ChessArmEnvSimple._gui_open = True
         else:
             self._pybullet_client = p.connect(p.DIRECT)
 

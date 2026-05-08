@@ -84,8 +84,9 @@ def find_latest_checkpoint(model_dir: str, prefix: str) -> str | None:
 def _make_env(env_class, rank: int, render: bool = False):
     def _init():
         from stable_baselines3.common.monitor import Monitor
-        # rank=0인 환경만 GUI로 열어 학습 과정 시각화 (나머지는 headless)
-        mode = "human" if (render and rank == 0) else None
+        # render=True면 모든 env에 동일한 render_mode 전달 (SB3 DummyVecEnv 요구사항)
+        # 실제 GUI 창은 env_simple._gui_open 플래그로 첫 번째 env만 열림
+        mode = "human" if render else None
         env = Monitor(env_class(render_mode=mode))
         env.reset(seed=rank)
         return env
@@ -94,7 +95,7 @@ def _make_env(env_class, rank: int, render: bool = False):
 
 def load_vec_env(env_class, n_envs: int, norm_path: str, render: bool = False):
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-    venv = DummyVecEnv([_make_env(env_class, i, render=(render and i == 0)) for i in range(n_envs)])
+    venv = DummyVecEnv([_make_env(env_class, i, render=render) for i in range(n_envs)])
     if os.path.exists(norm_path):
         venv = VecNormalize.load(norm_path, venv)
         venv.training = True
