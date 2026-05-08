@@ -247,7 +247,8 @@ class ChessArmEnvSimple(gym.Env):
             self._p.resetBasePositionAndOrientation(
                 self._target_body, self._target_xyz.tolist(), [0, 0, 0, 1]
             )
-        self._slow_render = True  # reset 시마다 slow 모드 유지
+        self._slow_render = True   # reset 시마다 slow 모드 유지
+        self._s_was_down  = False  # S키 엣지 감지용
 
         self._set_joint_angles(self._q_real)
 
@@ -297,9 +298,11 @@ class ChessArmEnvSimple(gym.Env):
 
         if self.render_mode == "human":
             keys = self._p.getKeyboardEvents()
-            if ord('s') in keys and keys[ord('s')] & self._p.KEY_WAS_TRIGGERED:
+            s_down = bool(keys.get(ord('s'), 0) & (self._p.KEY_WAS_TRIGGERED | self._p.KEY_IS_DOWN))
+            if s_down and not self._s_was_down:
                 self._slow_render = not self._slow_render
                 print(f"[렌더] 속도 제한: {'ON (느림)' if self._slow_render else 'OFF (빠름)'}")
+            self._s_was_down = s_down
             if self._slow_render:
                 time.sleep(0.02)  # ~50fps
 
