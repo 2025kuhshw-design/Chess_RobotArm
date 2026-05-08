@@ -10,7 +10,7 @@ from sim.env_simple import ChessArmEnvSimple
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수 (1단계보다 확대)
 # ─────────────────────────────────────────
-URDF_FULL_PATH  = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_full.urdf")
+URDF_FULL_PATH  = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_simple.urdf")
 
 NOISE_LOW_FULL    = -0.05      # 1단계(±0.03)보다 넓은 DR, 관절당 최대 ~3.3cm 오차
 NOISE_HIGH_FULL   =  0.05
