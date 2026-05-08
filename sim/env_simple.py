@@ -214,14 +214,34 @@ class ChessArmEnvSimple(gym.Env):
 
     # ─────────────────────────────────────────
     # PyBullet 관절 위치 설정
+    # slow 모드: 현재→목표 각도를 보간해 서보가 실제로 움직이는 것처럼 표현
     # ─────────────────────────────────────────
     def _set_joint_angles(self, q):
         p = self._p
         joint_indices = [i for i in range(self._n_joints)
                          if p.getJointInfo(self._robot_id, i)[2] == p.JOINT_REVOLUTE]
-        for idx, angle in zip(joint_indices[:3], q):
-            p.resetJointState(self._robot_id, idx, angle)
-        p.stepSimulation()
+        rev_indices = joint_indices[:3]
+
+        if self._is_gui and self._slow_render:
+            # 현재 관절각 읽기
+            curr = np.array([p.getJointState(self._robot_id, idx)[0]
+                             for idx in rev_indices], dtype=np.float64)
+            target = np.array(q, dtype=np.float64)
+            # MG996R 6 rad/s 기준 → 최대 이동각 / 속도 = 소요 시간
+            max_delta = float(np.max(np.abs(target - curr)))
+            duration  = max(max_delta / 6.0, 0.05)   # 최소 50ms
+            n_frames  = max(int(duration / 0.016), 3)  # ~60fps
+            for k in range(1, n_frames + 1):
+                t = k / n_frames
+                q_interp = curr + t * (target - curr)
+                for idx, angle in zip(rev_indices, q_interp):
+                    p.resetJointState(self._robot_id, idx, float(angle))
+                p.stepSimulation()
+                time.sleep(0.016)
+        else:
+            for idx, angle in zip(rev_indices, q):
+                p.resetJointState(self._robot_id, idx, angle)
+            p.stepSimulation()
 
     # ─────────────────────────────────────────
     # 라그랑주 토크 계산
@@ -325,8 +345,6 @@ class ChessArmEnvSimple(gym.Env):
 
         if self._is_gui:  # GUI 창이 있는 env[0]만 처리 (나머지는 풀속도 유지)
             self._handle_keys()
-            if self._slow_render:
-                time.sleep(0.02)  # ~50fps
 
         info = {"dist_m": dist, "dist_cm": dist * 100, "target": self._target_xyz}
         obs  = self._get_obs()
