@@ -12,10 +12,11 @@ from sim.env_simple import ChessArmEnvSimple
 # ─────────────────────────────────────────
 URDF_FULL_PATH  = os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_simple.urdf")
 
-NOISE_LOW_FULL    = -0.05      # 1단계(±0.03)보다 넓은 DR, 관절당 최대 ~3.3cm 오차
-NOISE_HIGH_FULL   =  0.05
+REACH_FINE_FULL   =  0.010     # 1단계(2cm)보다 빡빡한 성공 기준 (1cm)
+NOISE_LOW_FULL    = -0.10      # 1단계(±0.03)의 3배, 관절당 최대 ~2.5cm 오차
+NOISE_HIGH_FULL   =  0.10
 FRICTION_LOW_FULL =  0.01
-FRICTION_HIGH_FULL=  0.12      # 1단계(0.08)보다 넓은 DR, REACH_FINE=2cm 달성 가능 상한
+FRICTION_HIGH_FULL=  0.15      # 1단계(0.08)보다 넓은 DR
 MASS_VARIATION    =  0.20   # ±20%
 
 BASE_MASSES = [0.12, 0.08, 0.04]  # 링크 기본 질량 (kg) — lagrange.py와 동기화
@@ -29,6 +30,7 @@ class ChessArmEnvFull(ChessArmEnvSimple):
     def __init__(self, render_mode=None, urdf_path=None):
         full_path = urdf_path or os.path.abspath(URDF_FULL_PATH)
         super().__init__(render_mode=render_mode, urdf_path=full_path)
+        self._reach_fine = REACH_FINE_FULL  # 1단계(2cm)보다 빡빡한 1cm 기준으로 오버라이드
 
     # ─────────────────────────────────────────
     # DR 파라미터 오버라이드 (reset() 호출 전에 실행됨)

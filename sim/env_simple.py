@@ -29,8 +29,8 @@ REACH_FINE    = 0.020     # 종료 임계값 (m): 2cm 도달 시 에피소드 �
 TORQUE_LIMIT  = 1.27      # N·m
 TAU_OBS_LIMIT = 3.0       # 관측값 토크 클리핑 범위 (N·m) — observation_space 및 main.py 공유
 
-# q_real 관측값 범위: q_ik(±π) + action(±0.2) + noise(±0.03) + friction(0.08) → ±π + 0.35 여유
-OBS_Q_LIMIT  = math.pi + 0.4
+# q_real 관측값 범위: q_ik(±π) + action(±0.2) + noise(±0.10) + friction(0.15) → ±π + 0.55 여유
+OBS_Q_LIMIT  = math.pi + 0.6
 
 # Sim-to-Real Gap 노이즈 범위 — MG996R 기준: 반복 정밀도 ±2° ≈ ±0.035rad
 NOISE_LOW    = -0.03      # ±1.7° (MG996R 반복 정밀도 이내)
@@ -56,6 +56,7 @@ class ChessArmEnvSimple(gym.Env):
         super().__init__()
         self.render_mode = render_mode
         self.urdf_path   = urdf_path or os.path.abspath(URDF_PATH)
+        self._reach_fine = REACH_FINE   # env_full에서 오버라이드 가능
 
         self.observation_space = spaces.Box(
             low  = np.array([-math.pi]*3 + [-OBS_Q_LIMIT]*3 + [-1.0, -1.0, 0.0] + [-TAU_OBS_LIMIT]*3, dtype=np.float32),
@@ -339,7 +340,7 @@ class ChessArmEnvSimple(gym.Env):
             excess = np.sum(np.maximum(np.abs(self._tau) - SERVO_LIMIT, 0))
             reward -= 30.0 + excess * 5.0
 
-        terminated = dist < REACH_FINE
+        terminated = dist < self._reach_fine
         truncated  = self._step_count >= MAX_STEPS
 
         if terminated:
@@ -348,7 +349,8 @@ class ChessArmEnvSimple(gym.Env):
         if self._is_gui:  # GUI 창이 있는 env[0]만 처리 (나머지는 풀속도 유지)
             self._handle_keys()
 
-        info = {"dist_m": dist, "dist_cm": dist * 100, "target": self._target_xyz}
+        info = {"dist_m": dist, "dist_cm": dist * 100,
+                "reach_fine_cm": self._reach_fine * 100, "target": self._target_xyz}
         obs  = self._get_obs()
         return obs, reward, terminated, truncated, info
 

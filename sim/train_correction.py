@@ -20,7 +20,7 @@ from sim.env_simple import REACH_FINE
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
 STAGE1_STEPS    = 2_000_000
-STAGE2_STEPS    = 1_500_000
+STAGE2_STEPS    = 2_000_000
 N_ENVS          = 4           # 병렬 환경 수 (샘플 다양성 ↑)
 N_STEPS         = 2048        # 환경당 롤아웃 길이
 BATCH_SIZE      = 256         # 4envs × 2048 / 32 minibatches
@@ -173,7 +173,8 @@ def make_metrics_callback():
             for info, done in zip(infos, dones):
                 if done and "dist_cm" in info:
                     self._ep_dists.append(info["dist_cm"])
-                    self._ep_success.append(float(info["dist_cm"] < REACH_FINE * 100))
+                    threshold_cm = info.get("reach_fine_cm", REACH_FINE * 100)
+                    self._ep_success.append(float(info["dist_cm"] < threshold_cm))
                 if done and "episode" in info:
                     self._ep_rewards.append(info["episode"]["r"])
 
