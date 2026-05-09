@@ -67,9 +67,24 @@ def smooth_move(p, robot_id, rev_indices, q_from, q_to,
         time.sleep(1.0 / fps)
 
 
-def run_showcase(sequence=None, n_repeat: int = 0):
+URDF_MESH   = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_full.urdf"))
+URDF_SIMPLE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_simple.urdf"))
+
+
+def run_showcase(sequence=None, n_repeat: int = 0, urdf_path: str = None):
     import pybullet as p
     import pybullet_data
+
+    # ── URDF 선택: 메시 버전 우선, 없으면 실린더 버전 폴백 ──
+    if urdf_path is None:
+        if os.path.exists(URDF_MESH):
+            urdf_path = URDF_MESH
+            print(f"[URDF] 메시 버전 사용: {URDF_MESH}")
+        else:
+            urdf_path = URDF_SIMPLE
+            print(f"[URDF] 실린더 버전 사용 (메시 URDF 없음): {URDF_SIMPLE}")
+    else:
+        print(f"[URDF] {urdf_path}")
 
     # ── PyBullet 초기화 ──────────────────────────────────────
     client = p.connect(p.GUI)
@@ -77,9 +92,6 @@ def run_showcase(sequence=None, n_repeat: int = 0):
     p.setGravity(0, 0, -9.81)
     p.loadURDF("plane.urdf")
 
-    urdf_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "setup", "urdf", "robot_simple.urdf")
-    )
     robot_id = p.loadURDF(urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
 
     n_joints = p.getNumJoints(robot_id)
@@ -185,14 +197,16 @@ if __name__ == "__main__":
                         help="체스 오프닝 시연 시퀀스 실행")
     parser.add_argument("--repeat", type=int, default=0,
                         help="반복 횟수 (0=무한)")
+    parser.add_argument("--urdf", default=None,
+                        help="사용할 URDF 경로 (기본: robot_full.urdf → robot_simple.urdf 순으로 자동 선택)")
     args = parser.parse_args()
 
     if args.demo:
         print("[데모] 체스 오프닝 시퀀스 시연")
         squares = [sq for pair in DEMO_SEQUENCE for sq in pair]
-        run_showcase(sequence=squares, n_repeat=args.repeat or 3)
+        run_showcase(sequence=squares, n_repeat=args.repeat or 3, urdf_path=args.urdf)
     elif args.sequence:
-        run_showcase(sequence=args.sequence, n_repeat=args.repeat or 0)
+        run_showcase(sequence=args.sequence, n_repeat=args.repeat or 0, urdf_path=args.urdf)
     else:
         print("[랜덤] 체스판 랜덤 이동 (Ctrl+C로 종료)")
-        run_showcase(sequence=None, n_repeat=0)
+        run_showcase(sequence=None, n_repeat=0, urdf_path=args.urdf)
