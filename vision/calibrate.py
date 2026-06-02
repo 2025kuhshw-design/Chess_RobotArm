@@ -114,6 +114,12 @@ class CameraCalibrator:
                 for i in range(1, 8):
                     cv2.line(top, (i*cell, 0), (i*cell, PREVIEW_SIZE), (0,255,0), 1)
                     cv2.line(top, (0, i*cell), (PREVIEW_SIZE, i*cell), (0,255,0), 1)
+                # 원점 힌트: 좌상 칸이 a1(로봇 원점)이 되도록 클릭해야 함
+                cv2.rectangle(top, (1, 1), (cell-1, cell-1), (255,0,255), 2)
+                cv2.putText(top, "a1", (4, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
+                cv2.putText(top, "<- this corner must be ROBOT a1",
+                            (cell+4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,0,255), 1)
                 cv2.imshow(win_preview, top)
 
             key = cv2.waitKey(1) & 0xFF

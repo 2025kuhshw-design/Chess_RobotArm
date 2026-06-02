@@ -22,6 +22,10 @@ BLACK_THRESH = 80      # 이 이하면 검은 기물
 # 기물이 있는지 판단: 셀 중앙 영역의 분산이 이 이상이면 기물 있음
 PIECE_VAR_THRESH = 200
 
+# 디버그 오버레이 색상 (BGR)
+LABEL_COLOR  = (0, 215, 255)    # 칸 좌표 라벨: 노랑
+ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
+
 
 class ChessBoardDetector:
     def __init__(self, calibration_path: str = CALIB_PATH, camera_index: int = 0):
@@ -170,8 +174,12 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 3: 디버그 오버레이
     # ─────────────────────────────────────────
-    def overlay_debug(self, frame: np.ndarray) -> np.ndarray:
-        """격자선·기물 위치·인식 결과 오버레이."""
+    def overlay_debug(self, frame: np.ndarray, show_labels: bool = True) -> np.ndarray:
+        """
+        격자선·기물 위치·인식 결과 오버레이.
+        show_labels=True면 각 칸에 체스 좌표(a1~h8)와 (col,row)를 찍고
+        a1(=로봇 원점) 칸을 마젠타로 강조한다. 카메라 회전/반전 검증용.
+        """
         top = self._get_top_view(frame)
 
         try:
@@ -196,6 +204,35 @@ class ChessBoardDetector:
                         cv2.circle(top, (cx, cy), 15, (0,0,0), 1)
                     elif state == "black":
                         cv2.circle(top, (cx, cy), 15, (50,50,50), -1)
+
+        # 칸 좌표 라벨 + 원점 강조 (회전/반전 검증용)
+        if show_labels:
+            for row in range(8):
+                for col in range(8):
+                    x1 = col * CELL_SIZE_PX
+                    y1 = row * CELL_SIZE_PX
+                    # 체스 표기: col→파일(a-h), row→랭크(1-8)
+                    notation = f"{chr(ord('a') + col)}{row + 1}"
+
+                    # a1(col0,row0)=로봇 원점 칸 강조
+                    if col == 0 and row == 0:
+                        cv2.rectangle(top, (x1+1, y1+1),
+                                      (x1+CELL_SIZE_PX-1, y1+CELL_SIZE_PX-1),
+                                      ORIGIN_COLOR, 2)
+                        cv2.putText(top, "a1", (x1+3, y1+18),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, ORIGIN_COLOR, 2)
+                    else:
+                        cv2.putText(top, notation, (x1+3, y1+14),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, LABEL_COLOR, 1)
+                    # 작게 (col,row)도 표시
+                    cv2.putText(top, f"{col},{row}", (x1+3, y1+CELL_SIZE_PX-5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200,200,200), 1)
+
+            # 축 방향 안내
+            cv2.putText(top, "col-> (files a-h)", (5, TOP_SIZE-3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, LABEL_COLOR, 1)
+            cv2.putText(top, "a1 = ROBOT ORIGIN", (TOP_SIZE-185, 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, ORIGIN_COLOR, 1)
 
         return top
 
