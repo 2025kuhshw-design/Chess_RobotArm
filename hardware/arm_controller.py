@@ -17,14 +17,28 @@ INIT_WAIT_SEC    = 2.0         # 아두이노 초기화 대기
 CMD_TIMEOUT_SEC  = 3.0         # OK 응답 타임아웃
 SUCTION_ON_WAIT  = 0.5         # 흡착 후 대기 (초)
 SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
-LIFT_HEIGHT      = 0.10        # 안전 높이 (m)
+LIFT_HEIGHT      = 0.08        # 기본 안전 높이 (m) — 먼 칸에선 자동 축소됨
+LIFT_MIN         = 0.025       # 최소 리프트 (m) — 기물 최대 높이보다 커야 함
 
 # 관절 한계 (서보 각도)
 SERVO_MIN = 0
 SERVO_MAX = 180
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
+from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
+                              safe_approach_xyz,
+                              L1_DEFAULT, L2_DEFAULT, L3_DEFAULT, PIECE_Z)
+
+
+def _safe_lift(col: int, row: int) -> float:
+    """칸의 수평 거리를 고려해 IK가 성공하는 최대 리프트를 반환.
+    LIFT_HEIGHT와 실제 도달 한계 중 작은 값을 쓰고, LIFT_MIN 이상을 보장."""
+    x, y, _ = chess_square_to_xyz(col, row)
+    r = math.sqrt(x ** 2 + y ** 2)
+    arm_reach = L1_DEFAULT + L2_DEFAULT          # 0.295 m
+    # 수직 여유: sqrt(reach^2 - r^2) - L3 - PIECE_Z - 5mm 마진
+    max_z_safe = math.sqrt(max(arm_reach ** 2 - r ** 2, 0)) - L3_DEFAULT - PIECE_Z - 0.005
+    return max(LIFT_MIN, min(LIFT_HEIGHT, max_z_safe))
 
 
 class RealArm:
@@ -117,7 +131,7 @@ class RealArm:
         """
         def _move_to(col, row, lift=False):
             if lift:
-                x, y, z = safe_approach_xyz(col, row, LIFT_HEIGHT)
+                x, y, z = safe_approach_xyz(col, row, _safe_lift(col, row))
             else:
                 x, y, z = chess_square_to_xyz(col, row)
             q1, q2, q3 = inverse_kinematics(x, y, z)
