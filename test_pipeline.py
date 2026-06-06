@@ -156,9 +156,10 @@ def test_serial(port="COM3"):
     print(f"\n[test_serial] 아두이노 시리얼 ping 테스트 (포트: {port})")
     try:
         import serial
-        ser = serial.Serial(port, 9600, timeout=3)
         import time
-        time.sleep(2)
+        ser = serial.Serial(port, 9600, timeout=3)
+        time.sleep(2)           # 아두이노 리셋 대기
+        ser.reset_input_buffer()  # "READY" 등 초기화 메시지 버퍼에서 제거
         ser.write(b"A90,90,90,0\n")
         resp = ser.readline().decode().strip()
         ser.close()
