@@ -24,6 +24,13 @@ LIFT_MIN         = 0.025       # 최소 리프트 (m) — 기물 최대 높이�
 SERVO_MIN = 0
 SERVO_MAX = 180
 
+# 서보 혼 조립 오차 보정 (도) — A90,90,90 일 때 정면/수직 중립이 되도록 맞춤
+# 베이스: 뒤에서 봤을 때 왼쪽(+y, q1+)으로 틀어져 있으면 음수로 깎는다.
+#   보정 후에도 같은 방향으로 더 틀어지면 부호를 반대로(+45) 바꿀 것.
+JOINT1_OFFSET_DEG = -45
+JOINT2_OFFSET_DEG = 0
+JOINT3_OFFSET_DEG = 0
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                               safe_approach_xyz,
@@ -81,9 +88,9 @@ class RealArm:
     # ─────────────────────────────────────────
     @staticmethod
     def _rad_to_servo(q1: float, q2: float, q3: float) -> tuple:
-        s1 = int(90 + math.degrees(q1))    # 베이스
-        s2 = int(90 - math.degrees(q2))    # 어깨 (부호 반전)
-        s3 = int(90 + math.degrees(q3))    # 팔꿈치
+        s1 = int(90 + JOINT1_OFFSET_DEG + math.degrees(q1))    # 베이스
+        s2 = int(90 + JOINT2_OFFSET_DEG - math.degrees(q2))    # 어깨 (부호 반전)
+        s3 = int(90 + JOINT3_OFFSET_DEG + math.degrees(q3))    # 팔꿈치
 
         s1 = max(SERVO_MIN, min(SERVO_MAX, s1))
         s2 = max(SERVO_MIN, min(SERVO_MAX, s2))
@@ -194,10 +201,13 @@ class RealArm:
     # ─────────────────────────────────────────
     def home(self):
         """모든 관절 중립(0 라디안 = 서보 90도)으로 복귀."""
+        h1 = 90 + JOINT1_OFFSET_DEG
+        h2 = 90 + JOINT2_OFFSET_DEG
+        h3 = 90 + JOINT3_OFFSET_DEG
         if self.sim:
-            print("  [SIM] A90,90,90,0  (홈)")
+            print(f"  [SIM] A{h1},{h2},{h3},0  (홈)")
             return
-        self._send_cmd(90, 90, 90, False)
+        self._send_cmd(h1, h2, h3, False)
 
     def close(self):
         if self._ser is not None:
