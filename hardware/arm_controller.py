@@ -33,6 +33,12 @@ JOINT1_OFFSET_DEG = 0
 JOINT2_OFFSET_DEG = 0
 JOINT3_OFFSET_DEG = 0
 
+# 게임 시작/휴식 자세 = Z자 접힘 (서보 각도 직접 지정: s1=베이스, s2=어깨, s3=팔꿈치)
+# 수를 두는 사이 팔이 이 Z자 자세로 접혀 카메라 시야를 안 가리고 토크 부하도 줄인다.
+# ⚠️ 아래 값은 시작 추정치. 시리얼 모니터로 A{s1},{s2},{s3},0 을 넣어보며
+#    실제로 Z자로 접히는 각도를 찾아 이 세 값을 수정할 것.
+PARK_POSE = (90, 45, 135)   # (베이스 정면, 어깨 올림, 팔꿈치 접음)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                               safe_approach_xyz,
@@ -202,14 +208,12 @@ class RealArm:
     # 메서드: home
     # ─────────────────────────────────────────
     def home(self):
-        """모든 관절 중립(0 라디안 = 서보 90도)으로 복귀."""
-        h1 = 90 + JOINT1_OFFSET_DEG
-        h2 = 90 + JOINT2_OFFSET_DEG
-        h3 = 90 + JOINT3_OFFSET_DEG
+        """게임 시작/휴식 자세(Z자 접힘)로 복귀."""
+        s1, s2, s3 = PARK_POSE
         if self.sim:
-            print(f"  [SIM] A{h1},{h2},{h3},0  (홈)")
+            print(f"  [SIM] A{s1},{s2},{s3},0  (park/Z자 접힘)")
             return
-        self._send_cmd(h1, h2, h3, False)
+        self._send_cmd(s1, s2, s3, False)
 
     def close(self):
         if self._ser is not None:
