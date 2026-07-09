@@ -32,11 +32,12 @@ from sim.env_simple import TAU_OBS_LIMIT
 def load_rl_model():
     try:
         from stable_baselines3 import PPO
-        # 학습 당시 sb3 버전과 다를 때 스케줄 역직렬화 오류 방지용
+        # 학습 당시 스케줄(learning_rate 함수)이 cloudpickle로 값 저장돼 있어
+        # 다른 환경에서 로드 시 호출하면 깨짐 → 무해한 상수로 대체 (추론엔 무관)
         custom_objects = {
+            "learning_rate": 0.0,
             "lr_schedule": lambda _: 0.0,
-            "clip_range": lambda _: 0.0,
-            "exploration_schedule": lambda _: 0.0,
+            "clip_range": 0.0,
         }
         # 2단계 → 1단계 순으로 시도
         for name in ["stage2_final", "stage1_final"]:
