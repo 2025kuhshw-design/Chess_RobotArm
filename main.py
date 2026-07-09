@@ -32,11 +32,17 @@ from sim.env_simple import TAU_OBS_LIMIT
 def load_rl_model():
     try:
         from stable_baselines3 import PPO
+        # 학습 당시 sb3 버전과 다를 때 스케줄 역직렬화 오류 방지용
+        custom_objects = {
+            "lr_schedule": lambda _: 0.0,
+            "clip_range": lambda _: 0.0,
+            "exploration_schedule": lambda _: 0.0,
+        }
         # 2단계 → 1단계 순으로 시도
         for name in ["stage2_final", "stage1_final"]:
             path = os.path.join(MODEL_DIR, name + ".zip")
             if os.path.exists(path):
-                model = PPO.load(path)
+                model = PPO.load(path, custom_objects=custom_objects)
                 print(f"[RL] 모델 로드: {path}")
                 return model
         print("[RL] 저장된 모델 없음 → 보정 없이 실행 (학습 후 재실행 권장)")

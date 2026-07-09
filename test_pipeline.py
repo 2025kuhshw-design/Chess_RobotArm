@@ -187,11 +187,17 @@ def test_rl_model():
 
     try:
         from stable_baselines3 import PPO
+        # 학습 당시 sb3 버전과 다를 때 스케줄 역직렬화 오류 방지용
+        custom_objects = {
+            "lr_schedule": lambda _: 0.0,
+            "clip_range": lambda _: 0.0,
+            "exploration_schedule": lambda _: 0.0,
+        }
         model = None
         for name in ["stage2_final", "stage1_final"]:
             path = os.path.join(model_dir, name + ".zip")
             if os.path.exists(path):
-                model = PPO.load(path)
+                model = PPO.load(path, custom_objects=custom_objects)
                 print(f"  모델 로드: {path}")
                 break
 

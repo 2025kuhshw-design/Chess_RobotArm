@@ -60,7 +60,11 @@ def run_demo(model_path: str, vecnorm_path: str | None, n_episodes: int):
     else:
         env = VecNormalize(env, norm_obs=False, norm_reward=False, training=False)
 
-    model = PPO.load(model_path, env=env)
+    model = PPO.load(model_path, env=env, custom_objects={
+        "lr_schedule": lambda _: 0.0,
+        "clip_range": lambda _: 0.0,
+        "exploration_schedule": lambda _: 0.0,
+    })
 
     print("\n[조작법]  S: 속도 토글(느림↔빠름)  ←→↑↓: 카메라 회전  Ctrl+C: 종료\n")
 
