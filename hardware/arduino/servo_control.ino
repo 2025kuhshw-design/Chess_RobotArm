@@ -108,11 +108,7 @@ void loop() {
     }
   }
 
-  // 타임아웃: 5초 이상 명령 없으면 중립 복귀(안전)
-  if (millis() - lastCmdTime > TIMEOUT_MS) {
-    goNeutral();
-    lastCmdTime = millis();
-  }
+  // (타임아웃 자동 중립복귀 제거 — 마지막 명령 위치를 그대로 유지)
 }
 
 // ─────────────────────────────────────────
