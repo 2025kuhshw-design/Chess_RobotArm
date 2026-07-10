@@ -24,14 +24,18 @@ LIFT_MIN         = 0.025       # 최소 리프트 (m) — 기물 최대 높이�
 SERVO_MIN = 0
 SERVO_MAX = 180
 
-# 서보 혼 미세조정 오프셋 (도) — A90,90,90 일 때 정면/수평 중립이 되도록 맞춤.
-# ⚠️ 큰 오차(예: 45°, 135°)는 서보 가동범위(0~180)를 잡아먹으므로 소프트웨어로
-#    처리하지 말고, A90,90,90 상태에서 혼(horn)을 다시 끼워 기계적으로 맞출 것.
-#    혼 톱니 간격 때문에 남는 ±몇 도의 잔여 오차만 여기서 미세조정한다.
-# 올바른 중립(A90,90,90): 베이스=체스판 정면, 어깨+팔꿈치=앞으로 수평하게 일자.
-JOINT1_OFFSET_DEG = 0
-JOINT2_OFFSET_DEG = 0
-JOINT3_OFFSET_DEG = 0
+# ─────────────────────────────────────────
+# 서보 캘리브레이션 (혼 재장착 없이 소프트웨어로 맞춤)
+# ─────────────────────────────────────────
+# SERVOx_HOME: 해당 관절이 IK 기준자세(q=0)일 때 보낼 서보 각도.
+#   - 베이스  q1=0: 팔이 체스판 정면(중앙)을 똑바로 가리킴
+#   - 어깨    q2=0: 상완(윗팔)이 수평(테이블과 평행)으로 앞을 향함
+#   - 팔꿈치  q3=0: 전완(아랫팔)이 상완과 일직선(완전히 편 상태)
+# SERVOx_DIR: +1 또는 -1. 서보 각도를 키웠을 때 관절이 IK의 +방향으로 돌면 +1.
+#   (실물에서 반대로 움직이면 부호를 뒤집는다)
+SERVO1_HOME = 90;  SERVO1_DIR = +1   # 베이스
+SERVO2_HOME = 90;  SERVO2_DIR = -1   # 어깨
+SERVO3_HOME = 90;  SERVO3_DIR = +1   # 팔꿈치
 
 # 게임 시작/휴식 자세 = Z자 접힘 (서보 각도 직접 지정: s1=베이스, s2=어깨, s3=팔꿈치)
 # 수를 두는 사이 팔이 이 Z자 자세로 접혀 카메라 시야를 안 가리고 토크 부하도 줄인다.
@@ -96,9 +100,9 @@ class RealArm:
     # ─────────────────────────────────────────
     @staticmethod
     def _rad_to_servo(q1: float, q2: float, q3: float) -> tuple:
-        s1 = int(90 + JOINT1_OFFSET_DEG + math.degrees(q1))    # 베이스
-        s2 = int(90 + JOINT2_OFFSET_DEG - math.degrees(q2))    # 어깨 (부호 반전)
-        s3 = int(90 + JOINT3_OFFSET_DEG + math.degrees(q3))    # 팔꿈치
+        s1 = int(SERVO1_HOME + SERVO1_DIR * math.degrees(q1))    # 베이스
+        s2 = int(SERVO2_HOME + SERVO2_DIR * math.degrees(q2))    # 어깨
+        s3 = int(SERVO3_HOME + SERVO3_DIR * math.degrees(q3))    # 팔꿈치
 
         s1 = max(SERVO_MIN, min(SERVO_MAX, s1))
         s2 = max(SERVO_MIN, min(SERVO_MAX, s2))
