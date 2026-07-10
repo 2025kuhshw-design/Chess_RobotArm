@@ -1,5 +1,5 @@
-# 실제 로봇 작동 · RL 보정 · 카메라 · 시리얼에 필요한 핵심 패키지
-# (pybullet은 시뮬레이션 전용이라 여기서 제외 → requirements-sim.txt 참고)
+# Core packages for real robot operation, RL correction, camera, serial.
+# (pybullet is simulation-only and lives in requirements-sim.txt)
 stable-baselines3[extra]
 chess==1.10.0
 stockfish
