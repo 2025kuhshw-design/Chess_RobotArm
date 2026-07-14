@@ -51,17 +51,19 @@
 #define SERVO_MAX_PWM 510   // 약 2.49ms (180도)
 #define SERVO_PWM_CEIL 560  // 절대 펄스 상한 (과구동 방지, ~2.73ms)
 
-// 펌프/밸브: 인라인 MOSFET 보드에 풀듀티 ON / 0 OFF
-#define PWM_FULL_ON   4095
-#define PWM_OFF       0
+// 펌프/밸브 스위치 모듈(FZ006류)은 서보 3선(신호/V+/GND)으로 연결되며,
+// 상시 HIGH가 아니라 "서보 펄스(펄스폭)"로 켜고 끈다.
+//   ON  = 한쪽 끝 펄스(약 2.4ms),  OFF = 반대쪽 끝 펄스(약 0.5ms)
+// 모듈이 반대로 동작하면 DEV_ON_PULSE / DEV_OFF_PULSE 값을 서로 바꾸면 된다.
+#define DEV_ON_PULSE   SERVO_MAX_PWM   // 510 ≈ 2.4ms → 모듈 ON
+#define DEV_OFF_PULSE  SERVO_MIN_PWM   // 110 ≈ 0.5ms → 모듈 OFF
 
 // 밸브 동작 정의 (밸브 종류에 맞게 조정)
-//   기본: 평상시 닫힘(NC) + "전원 인가 시 열림" 가정
 //   → 집기(흡착ON): 펌프 ON, 밸브 OFF(닫힘=진공 유지)
 //   → 놓기(흡착OFF): 펌프 OFF, 밸브 ON(열림=진공 해제, 기물 낙하)
-//   밸브가 NO(평상시 열림)이면 VALVE_HOLD/RELEASE 값을 서로 바꾸세요.
-#define VALVE_HOLD    PWM_OFF      // 집기 중 밸브 상태(진공 유지)
-#define VALVE_RELEASE PWM_FULL_ON  // 놓기 시 밸브 상태(진공 해제)
+//   밸브가 반대로 동작하면 VALVE_HOLD/RELEASE 값을 서로 바꾼다.
+#define VALVE_HOLD    DEV_OFF_PULSE  // 집기 중 밸브 상태(진공 유지)
+#define VALVE_RELEASE DEV_ON_PULSE   // 놓기 시 밸브 상태(진공 해제)
 
 // ─────────────────────────────────────────
 // 전역 변수
@@ -166,12 +168,12 @@ void processCommand(String cmd) {
   pwm.setPWM(CH_JOINT2, 0, angleToPulse(a2));
   pwm.setPWM(CH_JOINT3, 0, angleToPulse(a3));
 
-  // 흡착기: 비트 1개 → 펌프 + 밸브 두 채널로 변환
+  // 흡착기: 비트 1개 → 펌프 + 밸브 두 채널로 (서보 펄스로 스위칭)
   if (suction == 1) {
-    pwm.setPWM(CH_PUMP,  0, PWM_FULL_ON);   // 펌프 ON (진공 생성)
+    pwm.setPWM(CH_PUMP,  0, DEV_ON_PULSE);  // 펌프 ON (진공 생성)
     pwm.setPWM(CH_VALVE, 0, VALVE_HOLD);    // 밸브 닫힘 (진공 유지)
   } else {
-    pwm.setPWM(CH_PUMP,  0, PWM_OFF);       // 펌프 OFF
+    pwm.setPWM(CH_PUMP,  0, DEV_OFF_PULSE); // 펌프 OFF
     pwm.setPWM(CH_VALVE, 0, VALVE_RELEASE); // 밸브 열림 (진공 해제 → 기물 낙하)
   }
 
@@ -186,6 +188,6 @@ void goNeutral() {
   pwm.setPWM(CH_JOINT1, 0, angleToPulse(NEUTRAL_ANGLE));
   pwm.setPWM(CH_JOINT2, 0, angleToPulse(NEUTRAL_ANGLE));
   pwm.setPWM(CH_JOINT3, 0, angleToPulse(NEUTRAL_ANGLE));
-  pwm.setPWM(CH_PUMP,  0, PWM_OFF);
-  pwm.setPWM(CH_VALVE, 0, PWM_OFF);   // 중립: 밸브도 비활성(전력 절약)
+  pwm.setPWM(CH_PUMP,  0, DEV_OFF_PULSE);
+  pwm.setPWM(CH_VALVE, 0, DEV_OFF_PULSE);   // 중립: 펌프/밸브 OFF
 }
