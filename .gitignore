@@ -8,3 +8,6 @@ venv/
 *.zip
 models/correction_model/*.zip
 vision/calibration.json
+
+# 정적분 발표 운동 로그 (실측 데이터는 USB/로컬 보관)
+analysis/logs/*.csv
