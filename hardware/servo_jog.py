@@ -20,6 +20,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=str, default="COM5")
     parser.add_argument("--baud", type=int, default=9600)
+    parser.add_argument("--step", type=int, default=2,
+                        help="한 스텝당 각도(도) — 작을수록 부드럽고 안전")
+    parser.add_argument("--step-delay", type=float, default=0.02,
+                        help="스텝 간 대기(s)")
     args = parser.parse_args()
 
     try:
@@ -33,17 +37,31 @@ def main():
     ser.reset_input_buffer()
     print(f"[jog] 연결됨: {args.port}")
 
-    s = [90, 90, 90]
+    s = [90, 90, 90]          # 현재(마지막으로 명령한) 위치
     suction = 0
 
-    def send():
+    def _send_now():
         cmd = f"A{s[0]},{s[1]},{s[2]},{suction}\n"
         ser.write(cmd.encode())
-        resp = ser.readline().decode().strip()
-        print(f"  보냄 {cmd.strip()}  → 응답 {resp}")
+        return ser.readline().decode().strip()
+
+    def ramp_to(target):
+        """현재 s에서 target까지 --step 도씩 부드럽게 이동 (충격/스톨 방지).
+        긁는 소리가 나면 즉시 Ctrl+C → 전원 차단."""
+        target = [max(0, min(180, int(v))) for v in target]
+        while s != target:
+            for j in range(3):
+                if s[j] < target[j]:
+                    s[j] = min(target[j], s[j] + args.step)
+                elif s[j] > target[j]:
+                    s[j] = max(target[j], s[j] - args.step)
+            _send_now()
+            time.sleep(args.step_delay)
+        print(f"  도달 A{s[0]},{s[1]},{s[2]},{suction}")
 
     print("사용법: '90 90 90' | 's1 120' | 'suction 1' | 'q'(종료)")
-    send()
+    print("  ※ 각도까지 조금씩 부드럽게 이동합니다. 긁는 소리 나면 즉시 Ctrl+C!")
+    _send_now()
 
     while True:
         try:
@@ -56,14 +74,17 @@ def main():
             break
 
         parts = line.split()
+        target = list(s)
         try:
             if len(parts) == 3 and all(p.lstrip("-").isdigit() for p in parts):
-                s = [max(0, min(180, int(p))) for p in parts]
+                target = [int(p) for p in parts]
             elif parts[0].startswith("s") and len(parts) == 2:
                 idx = int(parts[0][1]) - 1
-                s[idx] = max(0, min(180, int(parts[1])))
+                target[idx] = int(parts[1])
             elif parts[0] == "suction" and len(parts) == 2:
                 suction = 1 if parts[1] == "1" else 0
+                _send_now()
+                continue
             else:
                 print("  형식: '90 90 90' | 's1 120' | 'suction 1' | 'q'")
                 continue
@@ -71,12 +92,13 @@ def main():
             print("  입력 오류. 다시.")
             continue
 
-        send()
+        try:
+            ramp_to(target)
+        except KeyboardInterrupt:
+            print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
-    # 종료: 홈으로
-    s = [90, 90, 90]
-    suction = 0
-    send()
+    # 종료: 부드럽게 홈으로
+    ramp_to([90, 90, 90])
     ser.close()
     print("[jog] 종료.")
 
