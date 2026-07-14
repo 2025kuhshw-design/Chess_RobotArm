@@ -25,6 +25,34 @@ SERVO_MIN = 0
 SERVO_MAX = 180
 
 # ─────────────────────────────────────────
+# 안전: 관절별 소프트 각도 제한 (도)
+# ─────────────────────────────────────────
+# 각 서보가 갈 수 있는 안전 범위. 팔이 테이블·구조물에 처박히거나 스톨나는
+# 각도를 아예 막는다. 기본은 전 범위(0~180)이니, 실물에서 부딪히는 각도를
+# 확인한 뒤 좁혀 넣을 것. 예: 어깨(s2)가 40° 밑에서 테이블에 닿으면
+#   SERVO_SAFE_MIN = [0, 40, 0]  처럼 설정.
+# 제한에 걸리면 그 각도로 잘리고 경고를 출력한다(모르고 지나치지 않게).
+SERVO_SAFE_MIN = [0,   0,   0]     # [베이스, 어깨, 팔꿈치] 최소 허용각
+SERVO_SAFE_MAX = [180, 180, 180]   # [베이스, 어깨, 팔꿈치] 최대 허용각
+
+# ─────────────────────────────────────────
+# 안전: 부드러운 램프 이동 (충격/스톨 방지)
+# ─────────────────────────────────────────
+# 목표 각도로 즉시 슬램하지 않고 RAMP_STEP_DEG 씩 나눠 이동한다.
+# 값을 작게/대기를 길게 하면 더 부드럽고 안전(대신 느려짐).
+RAMP_STEP_DEG = 4       # 한 스텝당 최대 각도 변화 (도)
+RAMP_DELAY    = 0.015   # 스텝 간 대기 (s)
+
+
+def _clamp_safe(s1: int, s2: int, s3: int, warn: bool = True) -> tuple:
+    """관절별 소프트 제한으로 클램프. 잘리면 경고 출력."""
+    raw = [int(s1), int(s2), int(s3)]
+    out = [max(SERVO_SAFE_MIN[j], min(SERVO_SAFE_MAX[j], raw[j])) for j in range(3)]
+    if warn and out != raw:
+        print(f"  [안전제한] 서보각 {raw} → {out} (소프트 제한에 걸림)")
+    return out[0], out[1], out[2]
+
+# ─────────────────────────────────────────
 # 서보 캘리브레이션 (혼 재장착 없이 소프트웨어로 맞춤)
 # ─────────────────────────────────────────
 # SERVOx_HOME: 해당 관절이 IK 기준자세(q=0)일 때 보낼 서보 각도.
@@ -71,6 +99,9 @@ class RealArm:
         self.sim  = sim
         self.port = port
         self._ser = None
+        # 현재(마지막으로 명령한) 서보 위치. 연결 시 아두이노가 90,90,90으로
+        # 초기화되므로 여기서 시작. 램프 이동의 출발점으로 쓰인다.
+        self._cur = [90, 90, 90]
 
         if not sim:
             self._connect(port, baudrate)
@@ -131,12 +162,39 @@ class RealArm:
         raise TimeoutError(f"아두이노 응답 타임아웃: {cmd.strip()}")
 
     # ─────────────────────────────────────────
+    # 램프 전송: 현재 위치 → 목표까지 조금씩 이동 (충격/스톨 방지)
+    # ─────────────────────────────────────────
+    def _ramp_send(self, s1: int, s2: int, s3: int, suction: bool):
+        """소프트 제한 클램프 후, RAMP_STEP_DEG씩 나눠 목표까지 부드럽게 이동."""
+        t1, t2, t3 = _clamp_safe(s1, s2, s3)
+        target = [t1, t2, t3]
+
+        if self.sim:
+            self._cur = list(target)
+            self._send_cmd(target[0], target[1], target[2], suction)
+            return
+
+        while True:
+            moved = False
+            for j in range(3):
+                if self._cur[j] < target[j]:
+                    self._cur[j] = min(target[j], self._cur[j] + RAMP_STEP_DEG)
+                    moved = True
+                elif self._cur[j] > target[j]:
+                    self._cur[j] = max(target[j], self._cur[j] - RAMP_STEP_DEG)
+                    moved = True
+            self._send_cmd(self._cur[0], self._cur[1], self._cur[2], suction)
+            if not moved:
+                break
+            time.sleep(RAMP_DELAY)
+
+    # ─────────────────────────────────────────
     # 메서드: move (관절각 → 실행)
     # ─────────────────────────────────────────
     def move(self, q1: float, q2: float, q3: float, suction: bool = False):
-        """관절각(라디안) → 서보 각도 변환 후 전송."""
+        """관절각(라디안) → 서보 각도 변환 후 램프 이동으로 전송."""
         s1, s2, s3 = self._rad_to_servo(q1, q2, q3)
-        self._send_cmd(s1, s2, s3, suction)
+        self._ramp_send(s1, s2, s3, suction)
 
     # ─────────────────────────────────────────
     # 메서드: execute_move (체스 이동 1회 완전 실행)
@@ -212,12 +270,9 @@ class RealArm:
     # 메서드: home
     # ─────────────────────────────────────────
     def home(self):
-        """게임 시작/휴식 자세(Z자 접힘)로 복귀."""
+        """게임 시작/휴식 자세(Z자 접힘)로 램프 이동 복귀."""
         s1, s2, s3 = PARK_POSE
-        if self.sim:
-            print(f"  [SIM] A{s1},{s2},{s3},0  (park/Z자 접힘)")
-            return
-        self._send_cmd(s1, s2, s3, False)
+        self._ramp_send(s1, s2, s3, False)
 
     def close(self):
         if self._ser is not None:
