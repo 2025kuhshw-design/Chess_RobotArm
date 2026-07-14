@@ -87,7 +87,9 @@ def main():
                 target[idx] = int(parts[1])
             elif parts[0] == "suction" and len(parts) == 2:
                 suction = 1 if parts[1] == "1" else 0
-                _send_now()
+                resp = _send_now()
+                print(f"  흡착 {suction} 전송 A{s[0]},{s[1]},{s[2]},{suction} "
+                      f"→ 응답 {resp!r}")
                 continue
             else:
                 print("  형식: '90 90 90' | 's1 120' | 'suction 1' | 'q'")
