@@ -37,6 +37,9 @@
 #define BAUD_RATE     9600
 #define ANGLE_MIN     0
 #define ANGLE_MAX     180
+// 확장 최대각: 180을 넘겨 더 꺾어야 할 때만. ⚠️ 서보 하드 스톱에 부딪히면
+// 스톨→기어 손상. 반드시 조금씩 올리며 긁는 소리 나면 즉시 멈출 것.
+#define ANGLE_HARD_MAX 200
 #define NEUTRAL_ANGLE 90
 #define TIMEOUT_MS    5000   // 5초 이상 명령 없으면 중립 복귀
 
@@ -46,6 +49,7 @@
 #define SERVO_FREQ    50
 #define SERVO_MIN_PWM 110   // 약 0.54ms (0도)
 #define SERVO_MAX_PWM 510   // 약 2.49ms (180도)
+#define SERVO_PWM_CEIL 560  // 절대 펄스 상한 (과구동 방지, ~2.73ms)
 
 // 펌프/밸브: 인라인 MOSFET 보드에 풀듀티 ON / 0 OFF
 #define PWM_FULL_ON   4095
@@ -71,8 +75,11 @@ String inputBuffer = "";
 // ─────────────────────────────────────────
 int angleToPulse(int angle) {
   if (angle < ANGLE_MIN) angle = ANGLE_MIN;
-  if (angle > ANGLE_MAX) angle = ANGLE_MAX;
-  return map(angle, ANGLE_MIN, ANGLE_MAX, SERVO_MIN_PWM, SERVO_MAX_PWM);
+  if (angle > ANGLE_HARD_MAX) angle = ANGLE_HARD_MAX;
+  // 0~180을 SERVO_MIN~MAX로 고정 스케일, 180 초과는 같은 기울기로 외삽.
+  long p = SERVO_MIN_PWM + (long)angle * (SERVO_MAX_PWM - SERVO_MIN_PWM) / 180;
+  if (p > SERVO_PWM_CEIL) p = SERVO_PWM_CEIL;   // 과구동 방지 상한
+  return (int)p;
 }
 
 // ─────────────────────────────────────────
@@ -145,10 +152,10 @@ void processCommand(String cmd) {
   int a3      = v[2];
   int suction = v[3];
 
-  // 각도 유효 범위 검증
-  if (a1 < ANGLE_MIN || a1 > ANGLE_MAX ||
-      a2 < ANGLE_MIN || a2 > ANGLE_MAX ||
-      a3 < ANGLE_MIN || a3 > ANGLE_MAX ||
+  // 각도 유효 범위 검증 (확장 최대각까지 허용)
+  if (a1 < ANGLE_MIN || a1 > ANGLE_HARD_MAX ||
+      a2 < ANGLE_MIN || a2 > ANGLE_HARD_MAX ||
+      a3 < ANGLE_MIN || a3 > ANGLE_HARD_MAX ||
       suction < 0 || suction > 1) {
     Serial.println("ERR");
     return;

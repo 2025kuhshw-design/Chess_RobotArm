@@ -24,7 +24,11 @@ def main():
                         help="한 스텝당 각도(도) — 작을수록 부드럽고 안전")
     parser.add_argument("--step-delay", type=float, default=0.02,
                         help="스텝 간 대기(s)")
+    parser.add_argument("--max-angle", type=int, default=180,
+                        help="허용 최대각. 180 초과가 필요할 때만 올릴 것 "
+                             "(예: 200). ⚠️ 서보 하드 스톱 스톨 위험 — 조금씩!")
     args = parser.parse_args()
+    MAXA = max(180, min(200, args.max_angle))   # 펌웨어 상한(200)과 일치
 
     try:
         import serial
@@ -48,7 +52,7 @@ def main():
     def ramp_to(target):
         """현재 s에서 target까지 --step 도씩 부드럽게 이동 (충격/스톨 방지).
         긁는 소리가 나면 즉시 Ctrl+C → 전원 차단."""
-        target = [max(0, min(180, int(v))) for v in target]
+        target = [max(0, min(MAXA, int(v))) for v in target]
         while s != target:
             for j in range(3):
                 if s[j] < target[j]:
