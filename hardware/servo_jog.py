@@ -103,10 +103,10 @@ def main():
         except KeyboardInterrupt:
             print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
-    # 종료: 부드럽게 홈으로
-    ramp_to([90, 90, 90])
+    # 종료: 홈으로 되돌리지 않고 마지막 각도 그대로 유지한 채 종료.
+    # (아두이노 타임아웃 제거되어 포트 닫아도 서보가 현재 위치를 붙잡음)
     ser.close()
-    print("[jog] 종료.")
+    print(f"[jog] 종료. 현재 위치 유지: A{s[0]},{s[1]},{s[2]},{suction}")
 
 
 if __name__ == "__main__":
