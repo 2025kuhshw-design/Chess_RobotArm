@@ -11,8 +11,8 @@
  *   ch0 = joint1 서보 (베이스, MG996R)
  *   ch1 = joint2 서보 (어깨,   MG996R)
  *   ch2 = joint3 서보 (팔꿈치, MG996R)
- *   ch5 = 펌프   (인라인 PWM MOSFET 보드)
- *   ch6 = 밸브   (인라인 PWM MOSFET 보드)
+ *   ch4 = 펌프   (인라인 PWM MOSFET 보드)
+ *   ch5 = 밸브   (인라인 PWM MOSFET 보드)
  *
  * 시리얼 명령(기존과 동일): "A{각도1},{각도2},{각도3},{흡착기}\n"
  *   예: "A120,85,60,1\n"  (흡착기 1=집기 / 0=놓기)
@@ -31,8 +31,8 @@
 #define CH_JOINT1   0
 #define CH_JOINT2   1
 #define CH_JOINT3   2
-#define CH_PUMP     5
-#define CH_VALVE    6
+#define CH_PUMP     4
+#define CH_VALVE    5
 
 #define BAUD_RATE     9600
 #define ANGLE_MIN     0

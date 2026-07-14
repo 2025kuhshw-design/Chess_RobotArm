@@ -115,8 +115,8 @@ Uno GND  → PCA GND
 외부 6V(+) → PCA V+ 터미널
 외부 6V(−) → PCA GND 터미널   ← Uno GND와 공통 접지
 
-PCA ch0 → joint1 서보(베이스)   ch5 → 펌프
-PCA ch1 → joint2 서보(어깨)     ch6 → 밸브
+PCA ch0 → joint1 서보(베이스)   ch4 → 펌프
+PCA ch1 → joint2 서보(어깨)     ch5 → 밸브
 PCA ch2 → joint3 서보(팔꿈치)
 ```
 
