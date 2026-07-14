@@ -82,7 +82,7 @@ def main():
         try:
             if len(parts) == 3 and all(p.lstrip("-").isdigit() for p in parts):
                 target = [int(p) for p in parts]
-            elif parts[0].startswith("s") and len(parts) == 2:
+            elif parts[0] in ("s1", "s2", "s3") and len(parts) == 2:
                 idx = int(parts[0][1]) - 1
                 target[idx] = int(parts[1])
             elif parts[0] == "suction" and len(parts) == 2:
