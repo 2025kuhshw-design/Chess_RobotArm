@@ -126,7 +126,8 @@ class RealArm:
                  sim: bool = False,
                  start_pose: tuple = None,
                  ramp_step: int = None,
-                 ramp_delay: float = None):
+                 ramp_delay: float = None,
+                 auto_home: bool = True):
         """
         sim=True: 아두이노 없이 print로 시뮬레이션
         sim=False: 실제 시리얼 통신
@@ -136,6 +137,11 @@ class RealArm:
             없으면 PARK_POSE에 있다고 가정한다.
         ramp_step/ramp_delay: 이동 속도 (기본 RAMP_STEP_DEG/RAMP_DELAY).
             작은 step + 큰 delay = 느리고 안전.
+        auto_home: True면 초기화 직후 PARK_POSE로 이동한다.
+            ⚠️ 아두이노 부팅 직후 서보는 무부하라 팔이 중력으로 처져 있다.
+            그 상태에서 첫 명령이 나가면 서보가 '자기 최대 속도'로 되돌아가며,
+            이 첫 동작만은 램프로 늦출 수 없다(출발 위치를 모르므로).
+            도구에서 사용자가 직접 시점을 고르게 하려면 False로 둘 것.
         """
         self.sim  = sim
         self.port = port
@@ -151,7 +157,8 @@ class RealArm:
         else:
             print(f"[ArmController] 시뮬레이션 모드 (포트 미사용)")
 
-        self.home()
+        if auto_home:
+            self.home()
 
     # ─────────────────────────────────────────
     # 시리얼 연결

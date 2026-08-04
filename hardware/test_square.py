@@ -52,9 +52,12 @@ def main():
                     help="스텝 간 대기(s). 클수록 느리고 안전 (기본 0.05)")
     args = ap.parse_args()
 
+    # auto_home=False: 시작하자마자 팔을 움직이지 않는다.
+    # (부팅 직후 서보 무부하 → 팔이 처져 있고, 첫 명령은 램프가 안 먹는다)
     arm = RealArm(port=args.port, sim=args.sim,
                   start_pose=tuple(args.start) if args.start else None,
-                  ramp_step=args.step, ramp_delay=args.step_delay)
+                  ramp_step=args.step, ramp_delay=args.step_delay,
+                  auto_home=False)
 
     cur = None      # 현재 대상 칸 (col,row)
 
@@ -66,7 +69,12 @@ def main():
         print(f"    → x={x*100:.1f} y={y*100:.1f} z={z*100:.1f} cm  "
               f"(서보 {arm._rad_to_servo(*q)})")
 
-    print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | home | q")
+    print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
+          "set 38 140 180 | home | q")
+    print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
+          "  (실제와 다르면 'set'으로 교정)")
+    print("  ⚠️ 시작 시 아무 명령도 보내지 않습니다. 첫 이동 명령부터 제어 시작.")
+    print("     팔이 처져 있으면 손으로 Z자 자세로 받쳐준 뒤 첫 명령을 주세요.")
     print("🛑 긁는 소리·이상 동작 시 즉시 Ctrl+C → 전원 차단\n")
 
     while True:
@@ -86,7 +94,16 @@ def main():
                 print("  park 자세로 복귀")
                 arm.home()
 
-            elif p[0] in ("down", "up") and cur:
+            elif p[0] == "set" and len(p) == 4:
+                # 움직이지 않고 '현재 위치 가정'만 교정 (첫 명령 슬램 방지)
+                arm._cur = [int(v) for v in p[1:]]
+                print(f"  현재 위치 가정을 A{arm._cur[0]},{arm._cur[1]},"
+                      f"{arm._cur[2]} 로 교정 (전송 안 함)")
+
+            elif p[0] in ("down", "up"):
+                if cur is None:
+                    print("  먼저 칸을 지정하세요 (예: e5)")
+                    continue
                 print(f"  {'하강' if p[0]=='down' else '상승'}")
                 goto(cur[0], cur[1], lift=(p[0] == "up"))
 
@@ -134,6 +151,8 @@ def main():
 
         except ValueError as e:
             print(f"  [실패] {e}")
+            print("     ※ 랭크1~2(사람 진영)는 현재 배치에서 팔이 닿지 않습니다."
+                  " 랭크3~8로 시도하세요.")
         except KeyboardInterrupt:
             print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
