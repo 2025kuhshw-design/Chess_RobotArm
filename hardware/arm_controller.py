@@ -52,8 +52,9 @@ SERVO_SAFE_MAX = [180, 180, 180]   # [베이스, 어깨, 팔꿈치] 최대 허�
 # ─────────────────────────────────────────
 # 목표 각도로 즉시 슬램하지 않고 RAMP_STEP_DEG 씩 나눠 이동한다.
 # 값을 작게/대기를 길게 하면 더 부드럽고 안전(대신 느려짐).
-RAMP_STEP_DEG = 4       # 한 스텝당 최대 각도 변화 (도)
-RAMP_DELAY    = 0.015   # 스텝 간 대기 (s)
+# 기본값은 안전 우선(약 25~30°/초). 기어 손상 이력이 있어 보수적으로 잡았다.
+RAMP_STEP_DEG = 2       # 한 스텝당 최대 각도 변화 (도)
+RAMP_DELAY    = 0.05    # 스텝 간 대기 (s)
 
 
 def _clamp_safe(s1: int, s2: int, s3: int, warn: bool = True) -> tuple:
@@ -79,9 +80,10 @@ SERVO3_HOME = 50;  SERVO3_DIR = -1   # 팔꿈치 (일직선=50, 커질수록 앞
 
 # 게임 시작/휴식 자세 = Z자 접힘 (서보 각도 직접 지정: s1=베이스, s2=어깨, s3=팔꿈치)
 # 수를 두는 사이 팔이 이 Z자 자세로 접혀 카메라 시야를 안 가리고 토크 부하도 줄인다.
-# ⚠️ 아래 값은 시작 추정치. 시리얼 모니터로 A{s1},{s2},{s3},0 을 넣어보며
-#    실제로 Z자로 접히는 각도를 찾아 이 세 값을 수정할 것.
-PARK_POSE = (90, 45, 135)   # (베이스 정면, 어깨 올림, 팔꿈치 접음)
+# 실측 확정값 — 이 자세가 팔의 물리적 휴식 자세이기도 하다.
+# ⚠️ 전원을 켜고 프로그램을 시작할 때 팔이 실제로 이 자세에 있어야 안전하다.
+#    (다른 자세에 있으면 첫 명령에서 그 차이만큼 튄다 → start_pose로 알려줄 것)
+PARK_POSE = (38, 140, 180)   # (베이스 정면, 어깨, 팔꿈치) — Z자
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
@@ -122,7 +124,9 @@ class RealArm:
     def __init__(self, port: str = DEFAULT_PORT,
                  baudrate: int = DEFAULT_BAUDRATE,
                  sim: bool = False,
-                 start_pose: tuple = None):
+                 start_pose: tuple = None,
+                 ramp_step: int = None,
+                 ramp_delay: float = None):
         """
         sim=True: 아두이노 없이 print로 시뮬레이션
         sim=False: 실제 시리얼 통신
@@ -130,10 +134,14 @@ class RealArm:
             아두이노는 부팅 시 서보 출력을 켜지 않으므로(무부하) 실제 위치를
             알 수 없다. 전원을 끈 채 팔을 손으로 옮겼다면 반드시 지정할 것.
             없으면 PARK_POSE에 있다고 가정한다.
+        ramp_step/ramp_delay: 이동 속도 (기본 RAMP_STEP_DEG/RAMP_DELAY).
+            작은 step + 큰 delay = 느리고 안전.
         """
         self.sim  = sim
         self.port = port
         self._ser = None
+        self.ramp_step  = RAMP_STEP_DEG if ramp_step  is None else max(1, ramp_step)
+        self.ramp_delay = RAMP_DELAY    if ramp_delay is None else max(0.0, ramp_delay)
         # 램프 이동의 출발점으로 쓰이는 현재 위치 추정값.
         self._cur = list(start_pose) if start_pose else list(PARK_POSE)
         self._captured_count = 0    # 캡처 구역에 쌓은 기물 수
@@ -223,15 +231,15 @@ class RealArm:
             moved = False
             for j in range(3):
                 if self._cur[j] < target[j]:
-                    self._cur[j] = min(target[j], self._cur[j] + RAMP_STEP_DEG)
+                    self._cur[j] = min(target[j], self._cur[j] + self.ramp_step)
                     moved = True
                 elif self._cur[j] > target[j]:
-                    self._cur[j] = max(target[j], self._cur[j] - RAMP_STEP_DEG)
+                    self._cur[j] = max(target[j], self._cur[j] - self.ramp_step)
                     moved = True
             self._send_cmd(self._cur[0], self._cur[1], self._cur[2], suction)
             if not moved:
                 break
-            time.sleep(RAMP_DELAY)
+            time.sleep(self.ramp_delay)
 
     # ─────────────────────────────────────────
     # 메서드: move (관절각 → 실행)

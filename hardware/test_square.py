@@ -44,11 +44,17 @@ def main():
     ap.add_argument("--port", type=str, default="COM5")
     ap.add_argument("--sim", action="store_true", help="하드웨어 없이 명령만 출력")
     ap.add_argument("--start", type=int, nargs=3, metavar=("S1", "S2", "S3"),
-                    help="현재 팔의 실제 서보 각도 (전원 끄고 옮겼다면 필수)")
+                    help="현재 팔의 실제 서보 각도. 생략하면 PARK_POSE에 "
+                         "있다고 가정 (전원 끄고 옮겼다면 반드시 지정)")
+    ap.add_argument("--step", type=int, default=None,
+                    help="한 스텝당 각도(도). 작을수록 느리고 안전 (기본 2)")
+    ap.add_argument("--step-delay", type=float, default=None,
+                    help="스텝 간 대기(s). 클수록 느리고 안전 (기본 0.05)")
     args = ap.parse_args()
 
     arm = RealArm(port=args.port, sim=args.sim,
-                  start_pose=tuple(args.start) if args.start else None)
+                  start_pose=tuple(args.start) if args.start else None,
+                  ramp_step=args.step, ramp_delay=args.step_delay)
 
     cur = None      # 현재 대상 칸 (col,row)
 

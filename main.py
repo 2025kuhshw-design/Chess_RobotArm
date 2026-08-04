@@ -168,6 +168,13 @@ def main():
     parser.add_argument("--port",      type=str, default=DEFAULT_PORT)
     parser.add_argument("--stockfish", type=str, default=DEFAULT_STOCKFISH)
     parser.add_argument("--camera",   type=int, default=0)
+    parser.add_argument("--start", type=int, nargs=3, metavar=("S1","S2","S3"),
+                        help="시작 시 팔의 실제 서보 각도 "
+                             "(생략하면 PARK_POSE에 있다고 가정)")
+    parser.add_argument("--step", type=int, default=None,
+                        help="한 스텝당 각도(도). 작을수록 느리고 안전")
+    parser.add_argument("--step-delay", type=float, default=None,
+                        help="스텝 간 대기(s). 클수록 느리고 안전")
     args = parser.parse_args()
 
     print(f"\n[main] 실행 모드: {args.mode}")
@@ -205,7 +212,9 @@ def main():
     from hardware.arm_controller import RealArm
 
     sim_mode = args.mode == "sim"
-    arm = RealArm(port=args.port, sim=sim_mode)
+    arm = RealArm(port=args.port, sim=sim_mode,
+                  start_pose=tuple(args.start) if args.start else None,
+                  ramp_step=args.step, ramp_delay=args.step_delay)
 
     # RL 모델 로드
     rl_model = load_rl_model()

@@ -22,15 +22,15 @@ def main():
     parser.add_argument("--baud", type=int, default=9600)
     parser.add_argument("--step", type=int, default=2,
                         help="한 스텝당 각도(도) — 작을수록 부드럽고 안전")
-    parser.add_argument("--step-delay", type=float, default=0.02,
+    parser.add_argument("--step-delay", type=float, default=0.05,
                         help="스텝 간 대기(s)")
     parser.add_argument("--max-angle", type=int, default=180,
                         help="허용 최대각. 180 초과가 필요할 때만 올릴 것 "
                              "(예: 200). ⚠️ 서보 하드 스톱 스톨 위험 — 조금씩!")
     parser.add_argument("--start", type=int, nargs=3, metavar=("S1", "S2", "S3"),
-                        help="현재 팔의 대략적인 서보 각도. 전원을 끄고 팔을 손으로 "
-                             "옮겼다면 반드시 지정할 것 (안 하면 90,90,90에서 "
-                             "출발한다고 가정해 첫 이동이 튄다)")
+                        help="현재 팔의 대략적인 서보 각도. 생략하면 PARK_POSE"
+                             "(Z자 휴식자세)에 있다고 가정한다. 실제와 다르면 "
+                             "첫 이동에서 그 차이만큼 튀므로 반드시 확인할 것")
     args = parser.parse_args()
     MAXA = max(180, min(200, args.max_angle))   # 펌웨어 상한(200)과 일치
 
@@ -46,8 +46,11 @@ def main():
     print(f"[jog] 연결됨: {args.port}")
 
     # 현재 위치 추정값. 아두이노는 부팅 시 서보 출력을 켜지 않으므로(무부하),
-    # 실제 팔이 어디 있는지 알 수 없다. --start 로 알려주지 않으면 90,90,90 가정.
-    s = list(args.start) if args.start else [90, 90, 90]
+    # 실제 팔이 어디 있는지 알 수 없다. --start 가 없으면 Z자 휴식자세로 가정.
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    from hardware.arm_controller import PARK_POSE
+    s = list(args.start) if args.start else list(PARK_POSE)
     suction = 0
 
     def _send_now():
