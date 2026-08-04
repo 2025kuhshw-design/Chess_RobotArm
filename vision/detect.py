@@ -36,26 +36,27 @@ ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
 #   "left"   → 로봇이 왼쪽(코너 1·4 변)   ← 현재 배치
 #   "right"  → 로봇이 오른쪽(코너 2·3 변)
 #
-# 로봇 좌표계(utils/ik_solver.py): 파일 a→h 는 로봇에서 멀어지는 방향(+x),
-# 랭크 1→8 은 로봇 기준 왼쪽(+y). 위에서 내려다본 화면이므로 이 두 축의
+# 로봇 좌표계(utils/ik_solver.py): 랭크 1→8 은 사람 쪽에서 로봇 쪽으로,
+# 파일 a→h 는 로봇 기준 왼쪽(+y). 위에서 내려다본 화면이므로 이 두 축의
 # 화면상 방향이 ROBOT_SIDE 에 따라 결정된다.
+# (사람은 로봇 맞은편에 앉는다고 가정 — 랭크1이 사람 쪽, 랭크8이 로봇 쪽)
 ROBOT_SIDE = "left"
 
 
 def chess_to_grid(col: int, row: int) -> tuple:
     """체스 좌표(col=파일 0~7, row=랭크 0~7) → 탑뷰 격자 인덱스 (gx, gy).
     gx=왼쪽부터 0~7, gy=위부터 0~7."""
-    if ROBOT_SIDE == "bottom":
-        # 로봇 아래 → 파일은 위로, 랭크는 왼쪽으로
-        return (7 - row, 7 - col)
-    if ROBOT_SIDE == "top":
-        # 로봇 위 → 파일은 아래로, 랭크는 오른쪽으로
-        return (row, col)
     if ROBOT_SIDE == "left":
-        # 로봇 왼쪽 → 파일은 오른쪽으로, 랭크는 위로
-        return (col, 7 - row)
+        # 로봇 왼쪽 → 랭크는 왼쪽(로봇쪽)으로, 파일은 위로
+        return (7 - row, 7 - col)
     if ROBOT_SIDE == "right":
-        # 로봇 오른쪽 → 파일은 왼쪽으로, 랭크는 아래로
+        # 로봇 오른쪽 → 랭크는 오른쪽으로, 파일은 아래로
+        return (row, col)
+    if ROBOT_SIDE == "top":
+        # 로봇 위 → 랭크는 위로, 파일은 오른쪽으로
+        return (col, 7 - row)
+    if ROBOT_SIDE == "bottom":
+        # 로봇 아래 → 랭크는 아래로, 파일은 왼쪽으로
         return (7 - col, row)
     raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
 

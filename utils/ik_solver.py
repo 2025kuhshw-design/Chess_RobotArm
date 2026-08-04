@@ -86,11 +86,18 @@ def forward_kinematics(q1: float, q2: float, q3: float,
 def chess_square_to_xyz(col: int, row: int) -> tuple:
     """
     체스 칸 (col=0~7, row=0~7) → 월드 좌표 (x, y, z) [m]
-    col: 파일 (A=0 ~ H=7)
+    col: 파일 (a=0 ~ h=7)
     row: 랭크 (1=0 ~ 8=7)
+
+    배치 규약 — 로봇(BLACK)과 사람(WHITE)이 보드를 사이에 두고 마주 앉는다.
+      · 랭크는 로봇↔사람 방향(x). 랭크8(row=7)이 로봇 쪽(x 최소),
+        랭크1(row=0)이 사람 쪽(x 최대).
+        → 흑 기물은 로봇 앞, 백 기물은 사람 앞에 놓이고 폰 전진 방향이 맞는다.
+      · 파일은 좌우 방향(y). 파일a(col=0)가 로봇 기준 오른쪽(y 최소).
+        → 사람(백) 시점에서 a1이 왼쪽 앞 = 체스 관례와 일치.
     """
-    x = BOARD_ORIGIN_X + col * CELL_SIZE + CELL_SIZE / 2
-    y = BOARD_ORIGIN_Y + row * CELL_SIZE + CELL_SIZE / 2
+    x = BOARD_ORIGIN_X + (7 - row) * CELL_SIZE + CELL_SIZE / 2
+    y = BOARD_ORIGIN_Y + col * CELL_SIZE + CELL_SIZE / 2
     z = PIECE_Z
     return (x, y, z)
 
