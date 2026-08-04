@@ -121,17 +121,21 @@ def capture_slot_xyz(index: int) -> tuple:
 class RealArm:
     def __init__(self, port: str = DEFAULT_PORT,
                  baudrate: int = DEFAULT_BAUDRATE,
-                 sim: bool = False):
+                 sim: bool = False,
+                 start_pose: tuple = None):
         """
         sim=True: 아두이노 없이 print로 시뮬레이션
         sim=False: 실제 시리얼 통신
+        start_pose: 시작 시 팔의 실제 서보 각도 (s1,s2,s3).
+            아두이노는 부팅 시 서보 출력을 켜지 않으므로(무부하) 실제 위치를
+            알 수 없다. 전원을 끈 채 팔을 손으로 옮겼다면 반드시 지정할 것.
+            없으면 PARK_POSE에 있다고 가정한다.
         """
         self.sim  = sim
         self.port = port
         self._ser = None
-        # 현재(마지막으로 명령한) 서보 위치. 연결 시 아두이노가 90,90,90으로
-        # 초기화되므로 여기서 시작. 램프 이동의 출발점으로 쓰인다.
-        self._cur = [90, 90, 90]
+        # 램프 이동의 출발점으로 쓰이는 현재 위치 추정값.
+        self._cur = list(start_pose) if start_pose else list(PARK_POSE)
         self._captured_count = 0    # 캡처 구역에 쌓은 기물 수
 
         if not sim:

@@ -95,8 +95,16 @@ void setup() {
   pwm.setOscillatorFrequency(27000000);   // 내부 오실레이터(라이브러리 권장값)
   pwm.setPWMFreq(SERVO_FREQ);             // 서보용 50Hz
 
-  // 전원 켜면 전 서보 중립(90도), 펌프/밸브 OFF
-  goNeutral();
+  // ⚠️ 부팅 시 서보를 중립(90도)으로 보내지 않는다.
+  // 전원을 끈 채 팔을 손으로 옮겨두면 실제 위치와 90도의 차이만큼
+  // 전속력으로 튀어(슬램) 기어가 손상된다. 서보 출력을 끈 상태(무부하)로
+  // 두고, 첫 A 명령이 올 때부터 제어를 시작한다.
+  // 펌프/밸브만 확실히 OFF.
+  pwm.setPWM(CH_PUMP,  0, DEV_OFF_PULSE);
+  pwm.setPWM(CH_VALVE, 0, DEV_OFF_PULSE);
+  pwm.setPWM(CH_JOINT1, 0, 0);   // 출력 off → 서보 무부하(힘 안 걸림)
+  pwm.setPWM(CH_JOINT2, 0, 0);
+  pwm.setPWM(CH_JOINT3, 0, 0);
   lastCmdTime = millis();
 
   Serial.println("READY");
