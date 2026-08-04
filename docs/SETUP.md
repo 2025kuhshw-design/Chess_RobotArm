@@ -43,8 +43,7 @@ USB/
 ├── stockfish/
 │   └── stockfish-windows-x86-64-avx2.exe   ← 체스 엔진 (필수)
 ├── models/
-│   ├── stage2_final.zip                     ← RL 보정 모델 (main.py가 로드)
-│   └── stage2_vecnorm.pkl                   ← (sim 데모용, 실전 불필요)
+│   └── (RL 모델은 재학습 후에 넣는다 — 9-A-2 참고)
 └── offline_backup/                          ← (선택) 인터넷 막힌 경우
     ├── python-3.12.x-amd64.exe
     └── wheels/
@@ -53,7 +52,7 @@ USB/
 | 파일 | 출처 | 필수? |
 |---|---|---|
 | `stockfish .exe` | stockfishchess.org | ✅ 필수 |
-| `stage2_final.zip` | 구글드라이브 `MyDrive/chess_robot/correction_model/` | ⬜ 선택(없으면 IK만) |
+| `stage2_final.zip` | 구글드라이브 `MyDrive/chess_robot/correction_model/` | ❌ **현재 못 씀** — 재학습 필요(9-A-2) |
 | `calibration.json` | **가져가지 말 것** | ❌ 현장에서 새로 생성 |
 
 > 오프라인 대비: 집에서 `pip download -r requirements.txt -d USB\offline_backup\wheels`
@@ -377,6 +376,94 @@ python analysis/integrate.py --csv analysis/logs/run_dt50.csv --measured-cm 5.3
 
 ---
 
+## 9-A. 정확도 보정 — 두 가지 방법
+
+이름이 비슷해 헷갈리기 쉬운데 **성격이 완전히 다르다.**
+
+| | ① 실측 보정 | ② 시뮬 RL 재학습 |
+|---|---|---|
+| 도구 | `hardware/calibrate_board.py` | `sim/train_correction.py` |
+| 무엇을 학습하나 | **실제 로봇의 오차** | 해석적 IK ↔ PyBullet 동역학의 차이 |
+| 실제 정확도 개선 | ✅ **직접적** | ❓ 보장 없음 (실물을 본 적 없음) |
+| 걸리는 시간 | **20분** | 30분~수시간 |
+| 하드웨어 필요 | 필요 | 불필요 (컴퓨터만) |
+| 방법 | 실측 → 최소제곱 회귀 | 강화학습(PPO) |
+
+> **정확도를 올리는 건 ①이다.** ②는 "강화학습을 적용했다"는 서술과 시뮬 지표를 위한 것.
+> 보고서에는 **둘 다 하고 비교**하는 구성이 가장 정직하고 내용도 좋다.
+> "시뮬 RL만으로는 실제 오차가 줄지 않아 실측 보정이 필요했다"는 발견 과정 자체가 좋은 재료다.
+
+### 9-A-1. 실측 보정 ⭐ (정확도가 가장 크게 오름)
+
+**카메라를 쓰지 않는다.** 카메라로 재면 카메라 캘리브레이션 오차가 측정에 섞인다.
+대신 **체스판에 인쇄된 격자를 눈금으로** 쓴다 — 한 칸 29.1mm라 눈으로 2~3mm까지
+읽히고, 로봇 오차는 보통 1~2cm라 충분하다.
+**기물도 흡착 성공도 필요 없다.** 빈 팔을 내려 흡착컵 위치만 보면 된다.
+
+```bash
+python hardware/calibrate_board.py --port COM5 --step 1 --step-delay 0.1
+```
+1. 기동 절차(8-A) → `engage` → `start`
+2. 9개 칸(`a8 d8 h8 a5 d5 h5 b3 e3 f6`)으로 자동 이동
+3. 각 칸에서 흡착컵이 **칸 중심에서 벗어난 양**을 mm로 입력
+   - 부호: 앞(로봇에서 멀어짐)=**+x**, 왼쪽=**+y**
+   - 예) 5mm 앞·3mm 오른쪽 → `5 -3`
+   - `s`=건너뛰기, `q`=측정 종료하고 피팅
+4. 끝나면 `vision/board_fit.json` 저장 → **다음 실행부터 자동 적용**
+
+구해지는 것: **전체 밀림(offset) · 축척(scale) · 기울어짐(skew)**.
+계통 오차의 대부분이라 6~9점이면 충분하다.
+
+```
+측정 9점 → affine 보정식
+보정 전 평균 오차:  16.1 mm
+보정 후 잔차     :   1.1 mm
+→ 93% 감소
+```
+> 보정을 끄려면 `vision/board_fit.json`을 지우면 된다(자동으로 무보정 동작).
+> 카메라 캘리브레이션과 무관한 별개 파일이다.
+
+### 9-A-2. 시뮬 RL 재학습
+
+⚠️ **기존 `stage2_final.zip`은 못 쓴다.** 학습 당시와 지금의 관절각 범위가
+**전혀 겹치지 않는다**(elbow-up→down으로 바뀌어 q3 부호까지 반대). 모델이 한 번도
+본 적 없는 입력이라 나오는 보정값은 근거 없는 외삽이다. **재학습이 필요하다.**
+
+학습 환경이 `inverse_kinematics`를 그대로 호출하므로 **수정된 기구학이 자동 반영**된다.
+
+```bash
+pip install pybullet             # 학교 노트북엔 안 깔릴 수 있음(개인 PC 권장)
+python sim/benchmark.py          # ① 내 컴퓨터 속도부터 측정 (2~3분)
+python sim/train_correction.py --stage 1
+```
+
+**속도**: GPU는 거의 안 쓰인다(물리 시뮬은 CPU, 정책망은 작은 MLP).
+**CPU가 병목**이고 `--device cpu`가 보통 같거나 빠르다. `benchmark.py`가
+목표 스텝별 예상 시간을 표로 알려준다.
+
+**몇 스텝이 필요한가**
+| 스텝 | 의미 |
+|---|---|
+| 300,000 | 효과가 보이기 시작 (최소) |
+| **500,000** | **안정적 개선 (권장 하한)** |
+| 1,000,000 | 충분 |
+| 2,000,000 | `STAGE1_STEPS` 기본값 |
+
+- **50,000 스텝마다 체크포인트** 저장 → `Ctrl+C`로 끊고 **같은 명령 재실행하면 이어서** 학습
+- 시간을 줄이려면 `sim/train_correction.py`의 `STAGE1_STEPS`를 낮춘다
+- 결과: `models/correction_model/stage1_final.zip` → `models/correction_model/`에 두면 `main.py`가 자동 로드
+
+**Colab에서 돌리려면** (pybullet 설치가 안 될 때)
+```python
+!git clone -b claude/chess-robot-arm-LIojd https://github.com/2025kuhshw-design/chess_robotarm.git
+%cd chess_robotarm
+!pip install pybullet stable-baselines3[extra] gymnasium
+!python sim/train_correction.py --stage 1
+```
+결과가 구글드라이브 `MyDrive/chess_robot/correction_model/`에 저장된다.
+
+---
+
 ## 10. 캘리브레이션
 
 ### 10-1. 카메라 (현장 필수)
@@ -522,6 +609,10 @@ PIECE_Z         = 0.007   # 기물 높이 7mm (실측)
 | `CAPTURE_X0/Y0/SPACING` | 잡은 기물 놓는 구역 위치 |
 | `EXPECTED_FW` | 요구 펌웨어 버전 (`.ino`의 `FW_VERSION`과 일치해야) |
 
+### `vision/board_fit.json` (실측 보정 결과)
+`calibrate_board.py`가 만든다. 있으면 `chess_square_to_xyz`가 자동 적용,
+없으면 무보정. 지우면 보정이 꺼진다. git에는 올리지 않는다(환경마다 다름).
+
 ### `hardware/arduino/servo_control.ino`
 | 상수 | 의미 |
 |---|---|
@@ -620,7 +711,7 @@ python main.py --mode real --port COM5 ^
 [집에서 미리]
 □ Python 3.11 또는 3.12 설치 (3.13+ 금지) + py launcher
 □ Git · Arduino IDE + Adafruit PWM Servo Driver 라이브러리
-□ USB: stockfish.exe / stage2_final.zip / (오프라인 휠)
+□ USB: stockfish.exe / (오프라인 휠)   ※ RL 모델은 재학습 필요
 □ 컴퓨터만으로: test ik / lagrange / full / rl 전부 PASS 확인
 
 [현장 — 순서대로]
@@ -639,12 +730,17 @@ python main.py --mode real --port COM5 ^
 □ test_square.py → engage → start → 칸 정확도 확인
 □ zoff 로 하강 깊이 맞추기 → TOUCH_PRESS 에 반영
 □ pick / place / move 로 실제 집기·놓기 확인
+□ ⭐ calibrate_board.py → 실측 보정 (20분, 정확도 크게 향상)
 □ diagnose.py → 동시 부하 확인
 □ main.py --mode real  실전
+
+[여유 있으면]
+□ sim/benchmark.py → 학습 속도 확인
+□ sim/train_correction.py --stage 1 → RL 재학습 (기존 모델은 못 씀)
 ```
 
 **가장 빠뜨리기 쉬운 것**
-- USB의 `stage2_final.zip`, 현장 `calibration.json`(새로 생성)
+- USB의 `stockfish.exe`, 현장 `calibration.json`(새로 생성)
 - **펌프 V+ 직결**, **공통 GND**
 - **`.ino` 재업로드** → 실행 시 `fw=3 ✓` 한 줄로 확인
 - **기동 절차**: 팔을 Z자로 잡고 `engage` → `start` (안 하면 첫 명령에 튐)
@@ -657,6 +753,7 @@ python main.py --mode real --port COM5 ^
 |---|---|
 | **랭크1~2에 팔이 안 닿음** | 베이스 우회전 여유(38°)와 팔 길이(29.5cm) 한계. 로봇은 흑만 옮기므로 진행엔 무방 |
 | **첫 동작은 속도를 못 늦춤** | 서보에 위치 센서가 없어 출발점을 모름 → 기동 절차(8-A)로 해결 |
-| **RL 보정 모델이 안 맞음** | elbow-up으로 학습됐는데 현재는 elbow-down. 처음엔 모델 없이(IK만) 쓰고, 필요하면 재학습 |
+| **기존 RL 모델을 못 씀** | elbow-up으로 학습됐는데 현재는 elbow-down이라 관절각 범위가 전혀 겹치지 않음. 재학습 필요(9-A-2) |
+| **시뮬 RL은 실제 오차를 못 줄임** | 실물을 본 적이 없어 원리상 불가. 실제 정확도는 실측 보정(9-A-1)으로 올린다 |
 | **s3가 180 근처까지 감** | 팔꿈치 혼 장착 위치 때문. 여유가 필요하면 혼을 30°쯤 돌려 끼우면 됨 |
 | **기물 색 오인식은 무해** | 게임은 "빈 칸 ↔ 찬 칸"만 사용 |
