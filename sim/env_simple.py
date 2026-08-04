@@ -13,7 +13,7 @@ from gymnasium import spaces
 
 # 모듈 레벨에서 경로 추가 및 임포트 (매 호출마다 반복 방지)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from utils.ik_solver import (inverse_kinematics,
+from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                               BOARD_ORIGIN_X, BOARD_ORIGIN_Y,
                               CELL_SIZE, PIECE_Z)
 from utils.lagrange import required_torque, SERVO_LIMIT
@@ -143,8 +143,7 @@ class ChessArmEnvSimple(gym.Env):
         # 체스판 64칸 그리기
         for row in range(8):
             for col in range(8):
-                x = BOARD_ORIGIN_X + col * CELL_SIZE + CELL_SIZE / 2
-                y = BOARD_ORIGIN_Y + row * CELL_SIZE + CELL_SIZE / 2
+                x, y, _ = chess_square_to_xyz(col, row)
                 color = ([0.95, 0.90, 0.75, 1] if (row + col) % 2 == 0
                          else [0.35, 0.18, 0.05, 1])
                 vis = p.createVisualShape(
@@ -180,9 +179,8 @@ class ChessArmEnvSimple(gym.Env):
     def _random_target(self):
         col = np.random.randint(0, 8)
         row = np.random.randint(0, 8)
-        x = BOARD_ORIGIN_X + col * CELL_SIZE + CELL_SIZE / 2
-        y = BOARD_ORIGIN_Y + row * CELL_SIZE + CELL_SIZE / 2
-        z = PIECE_Z
+        # chess_square_to_xyz를 써야 실제 배치 규약과 어긋나지 않는다
+        x, y, z = chess_square_to_xyz(col, row)
         return np.array([x, y, z], dtype=np.float32)
 
     # ─────────────────────────────────────────
