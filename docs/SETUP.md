@@ -16,7 +16,7 @@ python test_pipeline.py --test full        # sim 모드 3수 전체 파이프라
 python test_pipeline.py --test rl          # RL 보정 모델 로드 + 64칸 추론
 
 # 시뮬레이션 게임 (시리얼 명령이 화면에 출력됨, stockfish 필요)
-python main.py --mode sim --stockfish <stockfish.exe 경로>
+python main.py --mode sim --stockfish C:\Users\hjh20\chess_robotarm\stockfish\stockfish.exe
 
 # 정적분 발표용 운동 데이터 (명령 궤적만 — 하드웨어 없이)
 python analysis/collect_motion.py --sim --from-sq e2 --to-sq e4 --dt 0.05 \
