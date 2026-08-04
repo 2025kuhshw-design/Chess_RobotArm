@@ -33,12 +33,40 @@ SIDE_INFO = {
 
 
 class CameraCalibrator:
-    def __init__(self, camera_index: int = 0):
+    def __init__(self, camera_index: int = 0, click_mode: str = "corners"):
         self.camera_index = camera_index
-        self.corners      = []          # 클릭한 코너 좌표 리스트
+        self.click_mode   = click_mode   # "corners"=8x8 바깥모서리 / "centers"=모서리칸 중앙
+        self.corners      = []           # 클릭한 좌표 리스트
         self.frame        = None
         self.cap          = None
         self._done        = False
+
+    # ─────────────────────────────────────────
+    # 클릭점 → 8×8 바깥 모서리 4점
+    # ─────────────────────────────────────────
+    def effective_corners(self):
+        """저장/변환에 쓸 '8×8 영역 바깥 모서리' 4점을 반환.
+
+        click_mode="centers"면 클릭한 4점은 모서리 '칸의 중앙'이다. 중앙끼리는
+        7칸 거리인데 8칸으로 나누면 전체가 1/8씩 어긋나므로, 호모그래피로
+        칸 단위 좌표계를 세우고 바깥 모서리(0,0)~(8,8)를 역변환해 얻는다.
+        """
+        if len(self.corners) < 4:
+            return None
+        if self.click_mode == "corners":
+            return [list(map(float, c)) for c in self.corners]
+
+        S = 100.0   # 칸 1개 = 100 단위 (임의 스케일)
+        src = np.array(self.corners, dtype=np.float32)
+        # 클릭한 중앙 4점 ↔ 칸 좌표 (0.5,0.5) (7.5,0.5) (7.5,7.5) (0.5,7.5)
+        dst = np.array([[0.5*S, 0.5*S], [7.5*S, 0.5*S],
+                        [7.5*S, 7.5*S], [0.5*S, 7.5*S]], dtype=np.float32)
+        M    = cv2.getPerspectiveTransform(src, dst)
+        Minv = np.linalg.inv(M)
+        outer = np.array([[[0, 0], [8*S, 0], [8*S, 8*S], [0, 8*S]]],
+                         dtype=np.float32)
+        pts = cv2.perspectiveTransform(outer, Minv)[0]
+        return [[float(p[0]), float(p[1])] for p in pts]
 
     # ─────────────────────────────────────────
     # 마우스 콜백
@@ -57,9 +85,10 @@ class CameraCalibrator:
     # 탑뷰 변환 (퍼스펙티브)
     # ─────────────────────────────────────────
     def _get_top_view(self, frame: np.ndarray) -> np.ndarray | None:
-        if len(self.corners) < 4:
+        eff = self.effective_corners()
+        if eff is None:
             return None
-        src = np.array(self.corners, dtype=np.float32)
+        src = np.array(eff, dtype=np.float32)
         dst = np.array([
             [0,              0             ],
             [PREVIEW_SIZE-1, 0             ],
@@ -74,11 +103,17 @@ class CameraCalibrator:
     # 캘리브레이션 저장
     # ─────────────────────────────────────────
     def _save(self):
-        data = {"corners": self.corners}
+        # 저장되는 건 항상 '8×8 바깥 모서리' (detect.py가 기대하는 형식)
+        eff = self.effective_corners()
+        data = {"corners": [[round(v, 2) for v in c] for c in eff]}
         with open(OUTPUT_PATH, "w") as f:
             json.dump(data, f, indent=2)
         print(f"\n[저장 완료] {OUTPUT_PATH}")
-        print(f"  corners: {self.corners}")
+        if self.click_mode == "centers":
+            print(f"  클릭(칸 중앙): {self.corners}")
+            print(f"  → 계산된 바깥모서리: {data['corners']}")
+        else:
+            print(f"  corners: {data['corners']}")
 
     # ─────────────────────────────────────────
     # 메인 실행
@@ -94,8 +129,14 @@ class CameraCalibrator:
         cv2.setMouseCallback(win_main, self._mouse_callback)
 
         print("\n=== 카메라 캘리브레이션 ===")
-        print("체스판 코너를 순서대로 클릭하세요:")
-        print("  1) 좌상  2) 우상  3) 우하  4) 좌하")
+        if self.click_mode == "centers":
+            print("모드: centers — 모서리 '칸의 중앙' 4곳을 클릭")
+            print("  (바깥 모서리는 코드가 자동 계산)")
+        else:
+            print("모드: corners — 8x8 영역의 '바깥 모서리' 4곳을 클릭")
+            print("  ※ 칸 중앙이 아니라 칸이 시작되는 맨 바깥 꼭짓점!")
+            print("  ※ 중앙이 찍기 편하면: --click centers 옵션 사용")
+        print("순서: 1) 좌상  2) 우상  3) 우하  4) 좌하")
         print("키: s=저장  r=초기화  q=종료\n")
 
         while True:
@@ -110,6 +151,14 @@ class CameraCalibrator:
                 cv2.circle(display, (cx, cy), 8, CORNER_COLORS[i], -1)
                 cv2.putText(display, CORNER_LABELS[i], (cx+10, cy),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, CORNER_COLORS[i], 2)
+
+            # centers 모드: 계산된 8x8 바깥 경계를 청록색으로 표시(검증용)
+            if self.click_mode == "centers" and len(self.corners) == 4:
+                eff = self.effective_corners()
+                pts = np.array(eff, dtype=np.int32).reshape(-1, 1, 2)
+                cv2.polylines(display, [pts], True, (255, 255, 0), 2)
+                cv2.putText(display, "computed 8x8 edge", (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
             remaining = 4 - len(self.corners)
             status_text = (f"코너 {len(self.corners)}/4 지정됨"
@@ -175,7 +224,11 @@ class CameraCalibrator:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="체스판 카메라 캘리브레이션")
     parser.add_argument("--camera", type=int, default=0, help="카메라 인덱스 (기본: 0)")
+    parser.add_argument("--click", choices=["corners", "centers"], default="corners",
+                        help="corners=8x8 바깥 모서리를 클릭(기본) / "
+                             "centers=모서리 '칸의 중앙'을 클릭하면 바깥 모서리를 "
+                             "자동 계산 (테두리가 둥글어 모서리가 애매할 때 편함)")
     args = parser.parse_args()
 
-    calibrator = CameraCalibrator(camera_index=args.camera)
+    calibrator = CameraCalibrator(camera_index=args.camera, click_mode=args.click)
     calibrator.run()
