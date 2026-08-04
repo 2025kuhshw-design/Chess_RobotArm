@@ -175,6 +175,8 @@ def main():
                         help="한 스텝당 각도(도). 작을수록 느리고 안전")
     parser.add_argument("--step-delay", type=float, default=None,
                         help="스텝 간 대기(s). 클수록 느리고 안전")
+    parser.add_argument("--no-startup", action="store_true",
+                        help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
     args = parser.parse_args()
 
     print(f"\n[main] 실행 모드: {args.mode}")
@@ -214,7 +216,17 @@ def main():
     sim_mode = args.mode == "sim"
     arm = RealArm(port=args.port, sim=sim_mode,
                   start_pose=tuple(args.start) if args.start else None,
-                  ramp_step=args.step, ramp_delay=args.step_delay)
+                  ramp_step=args.step, ramp_delay=args.step_delay,
+                  auto_home=False)
+
+    # 기동 절차 (팔이 처진 상태에서 안전하게 시작)
+    if not sim_mode and not args.no_startup:
+        from hardware.arm_controller import interactive_startup
+        if not interactive_startup(arm):
+            arm.close()
+            print("[main] 기동 중단."); return
+    else:
+        arm.home()
 
     # RL 모델 로드
     rl_model = load_rl_model()

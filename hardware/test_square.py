@@ -27,7 +27,7 @@ import os
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from hardware.arm_controller import RealArm, _safe_lift
+from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
 from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
 
 
@@ -50,6 +50,8 @@ def main():
                     help="한 스텝당 각도(도). 작을수록 느리고 안전 (기본 2)")
     ap.add_argument("--step-delay", type=float, default=None,
                     help="스텝 간 대기(s). 클수록 느리고 안전 (기본 0.05)")
+    ap.add_argument("--no-startup", action="store_true",
+                    help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
     args = ap.parse_args()
 
     # auto_home=False: 시작하자마자 팔을 움직이지 않는다.
@@ -58,6 +60,12 @@ def main():
                   start_pose=tuple(args.start) if args.start else None,
                   ramp_step=args.step, ramp_delay=args.step_delay,
                   auto_home=False)
+
+    # 기동 절차 (팔이 처진 상태에서 안전하게 시작)
+    if not args.sim and not args.no_startup:
+        if not interactive_startup(arm):
+            arm.close()
+            print("[test_square] 기동 중단."); return
 
     cur = None      # 현재 대상 칸 (col,row)
 

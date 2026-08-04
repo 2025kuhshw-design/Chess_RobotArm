@@ -107,6 +107,88 @@ def _safe_lift(col: int, row: int) -> float:
     return _safe_lift_xy(x, y)
 
 
+def interactive_startup(arm, max_angle: int = 180) -> bool:
+    """전원 인가 직후의 안전한 기동 절차.
+
+    아두이노는 부팅 시 서보를 잡지 않으므로 팔이 중력으로 처져 있다.
+    이 상태에서 아무 위치나 명령하면 서보가 최대 속도로 튄다(기어 손상 위험).
+    그래서 순서를 이렇게 잡는다:
+
+      1) engage <s1> <s2> <s3>  — 지금 팔이 있는 각도를 알려준다.
+         그 값을 그대로 보내므로 서보는 '움직이지 않고 힘만' 들어온다.
+      2) 조그 명령으로 PARK 자세까지 천천히 올린다 (램프 적용).
+      3) start — 세팅 완료. 게임/테스트로 넘어간다.
+
+    반환: True=정상 완료, False=사용자가 중단.
+    """
+    print("\n" + "=" * 52)
+    print(" 기동 절차 (팔이 처진 상태에서 안전하게 시작)")
+    print("=" * 52)
+    print("  1) engage 38 140 180   지금 팔이 있는 각도를 알려줌 (안 움직임)")
+    print("  2) 40 130 170 / s2 120 천천히 이동 (램프 적용)")
+    print("     park                PARK 자세로 천천히 이동")
+    print("  3) start               세팅 완료 → 진행")
+    print("     q                   중단")
+    print(f"  ※ PARK_POSE = A{PARK_POSE[0]},{PARK_POSE[1]},{PARK_POSE[2]}")
+    print("  🛑 긁는 소리 나면 즉시 Ctrl+C → 전원 차단\n")
+
+    engaged = False
+    while True:
+        try:
+            line = input("startup> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        if not line:
+            continue
+        p = line.split()
+
+        try:
+            if p[0] == "q":
+                return False
+
+            if p[0] == "start":
+                if not engaged:
+                    print("  아직 engage 하지 않았습니다. "
+                          "'engage <s1> <s2> <s3>' 먼저 실행하세요.")
+                    continue
+                print(f"  세팅 완료. 현재 위치 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}")
+                return True
+
+            if p[0] == "engage" and len(p) == 4:
+                pose = [max(0, min(max_angle, int(v))) for v in p[1:]]
+                arm._cur = list(pose)
+                # 같은 값을 한 번만 보내 서보에 힘만 들어오게 한다
+                arm._send_cmd(pose[0], pose[1], pose[2], False)
+                engaged = True
+                print(f"  A{pose[0]},{pose[1]},{pose[2]} 로 고정 (움직임 없어야 정상)")
+                print("  → 크게 움직였다면 값이 실제와 다른 것. 그 위치를 다시 engage 하세요.")
+                continue
+
+            if not engaged:
+                print("  먼저 'engage <s1> <s2> <s3>' 로 현재 각도를 알려주세요.")
+                continue
+
+            if p[0] == "park":
+                print(f"  PARK A{PARK_POSE[0]},{PARK_POSE[1]},{PARK_POSE[2]} 로 천천히 이동")
+                arm._ramp_send(*PARK_POSE, False)
+            elif len(p) == 3 and all(v.lstrip("-").isdigit() for v in p):
+                t = [max(0, min(max_angle, int(v))) for v in p]
+                print(f"  A{t[0]},{t[1]},{t[2]} 로 천천히 이동")
+                arm._ramp_send(t[0], t[1], t[2], False)
+            elif p[0] in ("s1", "s2", "s3") and len(p) == 2:
+                t = list(arm._cur)
+                t[int(p[0][1]) - 1] = max(0, min(max_angle, int(p[1])))
+                print(f"  A{t[0]},{t[1]},{t[2]} 로 천천히 이동")
+                arm._ramp_send(t[0], t[1], t[2], False)
+            else:
+                print("  명령: engage a b c | <a b c> | s2 120 | park | start | q")
+        except ValueError:
+            print("  입력 오류. 다시.")
+        except KeyboardInterrupt:
+            print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
+
+
 def capture_slot_xyz(index: int) -> tuple:
     """잡은 기물을 내려놓을 위치 (보드 밖, 팔이 확실히 닿는 구역).
 
