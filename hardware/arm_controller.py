@@ -20,6 +20,18 @@ SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
 LIFT_HEIGHT      = 0.08        # 기본 안전 높이 (m) — 먼 칸에선 자동 축소됨
 LIFT_MIN         = 0.025       # 최소 리프트 (m) — 기물 최대 높이보다 커야 함
 
+# ─────────────────────────────────────────
+# 잡은 기물을 내려놓는 구역 (보드 밖, 팔 도달 범위 안)
+# ─────────────────────────────────────────
+# 체스판은 x 0.015~0.248, y -0.115~0.118 을 차지한다. 이 구역은 보드 왼쪽
+# 바깥(y 음수)이면서 베이스에 가까워 IK가 항상 성공한다.
+# 실제 배치에 맞춰 조정할 것 (보드나 구조물과 겹치지 않는지 확인).
+CAPTURE_X0      = 0.060    # 첫 슬롯 x (m)
+CAPTURE_Y0      = -0.150   # 첫 슬롯 y (m) — 보드 왼쪽 바깥
+CAPTURE_SPACING = 0.030    # 슬롯 간격 (m)
+CAPTURE_COLS    = 4        # 가로 슬롯 수
+CAPTURE_ROWS    = 2        # 세로 슬롯 수
+
 # 관절 한계 (서보 각도)
 SERVO_MIN = 0
 SERVO_MAX = 180
@@ -77,15 +89,33 @@ from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                               L1_DEFAULT, L2_DEFAULT, L3_DEFAULT, PIECE_Z)
 
 
-def _safe_lift(col: int, row: int) -> float:
-    """칸의 수평 거리를 고려해 IK가 성공하는 최대 리프트를 반환.
+def _safe_lift_xy(x: float, y: float) -> float:
+    """(x,y)의 수평 거리를 고려해 IK가 성공하는 최대 리프트를 반환.
     LIFT_HEIGHT와 실제 도달 한계 중 작은 값을 쓰고, LIFT_MIN 이상을 보장."""
-    x, y, _ = chess_square_to_xyz(col, row)
     r = math.sqrt(x ** 2 + y ** 2)
     arm_reach = L1_DEFAULT + L2_DEFAULT          # 0.295 m
     # 수직 여유: sqrt(reach^2 - r^2) - L3 - PIECE_Z - 5mm 마진
     max_z_safe = math.sqrt(max(arm_reach ** 2 - r ** 2, 0)) - L3_DEFAULT - PIECE_Z - 0.005
     return max(LIFT_MIN, min(LIFT_HEIGHT, max_z_safe))
+
+
+def _safe_lift(col: int, row: int) -> float:
+    """체스 칸 기준 안전 리프트."""
+    x, y, _ = chess_square_to_xyz(col, row)
+    return _safe_lift_xy(x, y)
+
+
+def capture_slot_xyz(index: int) -> tuple:
+    """잡은 기물을 내려놓을 위치 (보드 밖, 팔이 확실히 닿는 구역).
+
+    이전 방식(잡은 칸에서 x+5cm)은 h1 같은 먼 칸에서 반경을 넘어 IK가
+    실패했다(r>0.295). 베이스에 가까운 고정 구역에 순서대로 쌓는다.
+    index가 슬롯 수를 넘으면 순환한다(기물이 겹치지만 동작은 유지)."""
+    col = index % CAPTURE_COLS
+    row = (index // CAPTURE_COLS) % CAPTURE_ROWS
+    x = CAPTURE_X0 + col * CAPTURE_SPACING
+    y = CAPTURE_Y0 - row * CAPTURE_SPACING
+    return (x, y, PIECE_Z)
 
 
 class RealArm:
@@ -102,6 +132,7 @@ class RealArm:
         # 현재(마지막으로 명령한) 서보 위치. 연결 시 아두이노가 90,90,90으로
         # 초기화되므로 여기서 시작. 램프 이동의 출발점으로 쓰인다.
         self._cur = [90, 90, 90]
+        self._captured_count = 0    # 캡처 구역에 쌓은 기물 수
 
         if not sim:
             self._connect(port, baudrate)
@@ -230,11 +261,11 @@ class RealArm:
             self.move(*inverse_kinematics(*chess_square_to_xyz(tc, tr)), suction=True)
             time.sleep(SUCTION_ON_WAIT)
             _move_to(tc, tr, lift=True)
-            # 잡은 기물은 board 밖 임시 위치에 내려놓음 (col=8 영역)
-            x_out = chess_square_to_xyz(tc, tr)[0] + 0.05
-            y_out = chess_square_to_xyz(tc, tr)[1]
-            z_out = chess_square_to_xyz(tc, tr)[2]
-            q_out = inverse_kinematics(x_out, y_out, z_out + LIFT_HEIGHT)
+            # 잡은 기물은 보드 밖 캡처 구역에 내려놓음 (항상 도달 가능한 위치)
+            x_out, y_out, z_out = capture_slot_xyz(self._captured_count)
+            self._captured_count += 1
+            lift_out = _safe_lift_xy(x_out, y_out)
+            q_out = inverse_kinematics(x_out, y_out, z_out + lift_out)
             self.move(*q_out, suction=True)
             q_down = inverse_kinematics(x_out, y_out, z_out)
             self.move(*q_down, suction=True)

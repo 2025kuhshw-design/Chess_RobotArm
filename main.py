@@ -134,9 +134,17 @@ def run_game(args, arm, detector, rl_model):
                 correction = delta
                 print(f"  [RL 보정] Δq = {np.round(delta, 4)}")
 
-            # 실행
-            arm.execute_move(from_sq, to_sq, is_capture=capture,
-                             rl_correction=correction)
+            # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
+            try:
+                arm.execute_move(from_sq, to_sq, is_capture=capture,
+                                 rl_correction=correction)
+            except ValueError as e:
+                print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
+                print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")
+                try:
+                    arm.home()
+                except Exception:
+                    pass
 
     # 게임 종료
     print("\n" + "="*50)
