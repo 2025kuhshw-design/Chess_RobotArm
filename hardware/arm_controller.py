@@ -73,9 +73,9 @@ def _clamp_safe(s1: int, s2: int, s3: int, warn: bool = True) -> tuple:
 #   - 팔꿈치  q3=0: 전완(아랫팔)이 상완과 일직선(완전히 편 상태)
 # SERVOx_DIR: +1 또는 -1. 서보 각도를 키웠을 때 관절이 IK의 +방향으로 돌면 +1.
 #   (실물에서 반대로 움직이면 부호를 뒤집는다)
-SERVO1_HOME = 90;  SERVO1_DIR = +1   # 베이스
-SERVO2_HOME = 90;  SERVO2_DIR = -1   # 어깨
-SERVO3_HOME = 90;  SERVO3_DIR = +1   # 팔꿈치
+SERVO1_HOME = 38;  SERVO1_DIR = +1   # 베이스 (s1 커질수록 로봇 왼쪽=+y)
+SERVO2_HOME = -10; SERVO2_DIR = +1   # 어깨 (수직=80, 작아질수록 앞으로)
+SERVO3_HOME = 50;  SERVO3_DIR = -1   # 팔꿈치 (일직선=50, 커질수록 앞으로)
 
 # 게임 시작/휴식 자세 = Z자 접힘 (서보 각도 직접 지정: s1=베이스, s2=어깨, s3=팔꿈치)
 # 수를 두는 사이 팔이 이 Z자 자세로 접혀 카메라 시야를 안 가리고 토크 부하도 줄인다.
