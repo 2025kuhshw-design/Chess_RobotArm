@@ -17,17 +17,17 @@ INIT_WAIT_SEC    = 2.0         # 아두이노 초기화 대기
 CMD_TIMEOUT_SEC  = 3.0         # OK 응답 타임아웃
 SUCTION_ON_WAIT  = 0.5         # 흡착 후 대기 (초)
 SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
-LIFT_HEIGHT      = 0.08        # 기본 안전 높이 (m) — 먼 칸에선 자동 축소됨
-LIFT_MIN         = 0.025       # 최소 리프트 (m) — 기물 최대 높이보다 커야 함
+LIFT_HEIGHT      = 0.04        # 기본 안전 높이 (m) — 기물 7mm 기준 충분
+LIFT_MIN         = 0.015       # 최소 리프트 (m) — 기물(7mm)보다 커야 함
 
 # ─────────────────────────────────────────
 # 잡은 기물을 내려놓는 구역 (보드 밖, 팔 도달 범위 안)
 # ─────────────────────────────────────────
-# 체스판은 x 0.015~0.248, y -0.115~0.118 을 차지한다. 이 구역은 보드 왼쪽
-# 바깥(y 음수)이면서 베이스에 가까워 IK가 항상 성공한다.
+# 체스판은 x 0.110~0.343, y -0.060~0.173 을 차지한다. 이 구역은 보드 바깥
+# (로봇 왼쪽 +y)이면서 베이스 가동범위 안이라 IK가 성공한다.
 # 실제 배치에 맞춰 조정할 것 (보드나 구조물과 겹치지 않는지 확인).
-CAPTURE_X0      = 0.060    # 첫 슬롯 x (m)
-CAPTURE_Y0      = -0.150   # 첫 슬롯 y (m) — 보드 왼쪽 바깥
+CAPTURE_X0      = 0.080    # 첫 슬롯 x (m)
+CAPTURE_Y0      = 0.230    # 첫 슬롯 y (m) — 보드 왼쪽(+y) 바깥
 CAPTURE_SPACING = 0.030    # 슬롯 간격 (m)
 CAPTURE_COLS    = 4        # 가로 슬롯 수
 CAPTURE_ROWS    = 2        # 세로 슬롯 수
@@ -166,15 +166,25 @@ class RealArm:
     # ─────────────────────────────────────────
     @staticmethod
     def _rad_to_servo(q1: float, q2: float, q3: float) -> tuple:
-        s1 = int(SERVO1_HOME + SERVO1_DIR * math.degrees(q1))    # 베이스
-        s2 = int(SERVO2_HOME + SERVO2_DIR * math.degrees(q2))    # 어깨
-        s3 = int(SERVO3_HOME + SERVO3_DIR * math.degrees(q3))    # 팔꿈치
+        """관절각(라디안) → 서보 각도. 서보 가동범위를 벗어나면 ValueError.
 
-        s1 = max(SERVO_MIN, min(SERVO_MAX, s1))
-        s2 = max(SERVO_MIN, min(SERVO_MAX, s2))
-        s3 = max(SERVO_MIN, min(SERVO_MAX, s3))
+        ⚠️ 예전에는 범위를 벗어나도 조용히 클램프해서, 팔이 아무 경고 없이
+        엉뚱한 위치로 갔다. 이제는 명시적으로 실패시켜 호출부가 알 수 있게 한다.
+        """
+        s1 = int(round(SERVO1_HOME + SERVO1_DIR * math.degrees(q1)))   # 베이스
+        s2 = int(round(SERVO2_HOME + SERVO2_DIR * math.degrees(q2)))   # 어깨
+        s3 = int(round(SERVO3_HOME + SERVO3_DIR * math.degrees(q3)))   # 팔꿈치
 
-        return s1, s2, s3
+        out = []
+        for name, v in (("s1", s1), ("s2", s2), ("s3", s3)):
+            if not (SERVO_MIN <= v <= SERVO_MAX):
+                raise ValueError(
+                    f"서보 가동범위 밖: {name}={v} "
+                    f"(허용 {SERVO_MIN}~{SERVO_MAX}). 이 칸은 현재 배치에서 "
+                    f"팔이 닿지 않습니다."
+                )
+            out.append(v)
+        return tuple(out)
 
     # ─────────────────────────────────────────
     # 단일 명령 전송

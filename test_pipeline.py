@@ -250,15 +250,21 @@ def test_full():
         arm   = RealArm(sim=True)
         board = chess.Board()
 
-        # 미리 정의된 3수 게임 (e2e4, e7e5, d2d4)
-        moves_uci = ["e2e4", "e7e5", "d2d4"]
+        # 미리 정의된 4수 게임. 로봇은 BLACK만 팔로 옮긴다(main.py와 동일).
+        # 백(사람)의 수는 손으로 두므로 팔 동작 대상이 아니다.
+        moves_uci = ["e2e4", "e7e5", "d2d4", "g8f6"]
 
         for i, uci in enumerate(moves_uci):
             move    = chess.Move.from_uci(uci)
             capture = is_capture(board, move)
             from_sq, to_sq = move_to_squares(move)
+            is_robot_move = (board.turn == chess.BLACK)
 
             board.push(move)
+
+            if not is_robot_move:
+                print(f"  수 {i+1}: {uci}  (사람 수 — 팔 동작 없음)")
+                continue
 
             x, y, z = chess_square_to_xyz(*from_sq)
             q1, q2, q3 = inverse_kinematics(x, y, z)
