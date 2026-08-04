@@ -18,6 +18,19 @@ CORNER_COLORS   = [(0,0,255),(0,165,255),(0,255,0),(255,0,0)]  # 코너 순서�
 CORNER_LABELS   = ["좌상(1)", "우상(2)", "우하(3)", "좌하(4)"]
 OUTPUT_PATH     = os.path.join(os.path.dirname(__file__), "calibration.json")
 
+# 보드 방향은 detect.py 한 곳에서만 관리한다 (힌트가 실제 설정과 어긋나지 않도록)
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from vision.detect import ROBOT_SIDE, chess_to_grid
+
+# ROBOT_SIDE별 안내 문구와 로봇이 있는 변
+SIDE_INFO = {
+    "bottom": ("ROBOT THIS SIDE (corners 3-4)", "bottom"),
+    "top":    ("ROBOT THIS SIDE (corners 1-2)", "top"),
+    "left":   ("ROBOT (corners 1-4)",           "left"),
+    "right":  ("ROBOT (corners 2-3)",           "right"),
+}
+
 
 class CameraCalibrator:
     def __init__(self, camera_index: int = 0):
@@ -114,18 +127,33 @@ class CameraCalibrator:
                 for i in range(1, 8):
                     cv2.line(top, (i*cell, 0), (i*cell, PREVIEW_SIZE), (0,255,0), 1)
                     cv2.line(top, (0, i*cell), (PREVIEW_SIZE, i*cell), (0,255,0), 1)
-                # 방향 힌트: 코너 3·4 변(아래쪽)이 로봇과 가까운 쪽이어야 함
-                # (vision/detect.py 의 ROBOT_SIDE = "bottom" 기준)
-                cv2.line(top, (0, PREVIEW_SIZE-2), (PREVIEW_SIZE, PREVIEW_SIZE-2),
-                         (255,0,255), 4)
-                cv2.putText(top, "ROBOT THIS SIDE (corners 3-4)",
-                            (6, PREVIEW_SIZE-10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
-                # a1 = 우하(코너 3) 칸
-                cv2.rectangle(top, (PREVIEW_SIZE-cell+1, PREVIEW_SIZE-cell+1),
-                              (PREVIEW_SIZE-2, PREVIEW_SIZE-2), (255,0,255), 2)
-                cv2.putText(top, "a1", (PREVIEW_SIZE-cell+5, PREVIEW_SIZE-cell+20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
+                # 방향 힌트: detect.py의 ROBOT_SIDE에 맞춰 로봇 쪽 변과 a1을 표시
+                MAG = (255, 0, 255)
+                label, side = SIDE_INFO[ROBOT_SIDE]
+                P = PREVIEW_SIZE
+                if side == "bottom":
+                    cv2.line(top, (0, P-2), (P, P-2), MAG, 4)
+                    cv2.putText(top, label, (6, P-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAG, 2)
+                elif side == "top":
+                    cv2.line(top, (0, 2), (P, 2), MAG, 4)
+                    cv2.putText(top, label, (6, 24),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAG, 2)
+                elif side == "left":
+                    cv2.line(top, (2, 0), (2, P), MAG, 4)
+                    cv2.putText(top, label, (8, P//2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAG, 2)
+                else:  # right
+                    cv2.line(top, (P-2, 0), (P-2, P), MAG, 4)
+                    cv2.putText(top, label, (P-150, P//2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAG, 2)
+
+                # a1 칸 강조 (ROBOT_SIDE에 따라 위치가 달라짐)
+                gx, gy = chess_to_grid(0, 0)
+                ax, ay = gx * cell, gy * cell
+                cv2.rectangle(top, (ax+1, ay+1), (ax+cell-1, ay+cell-1), MAG, 2)
+                cv2.putText(top, "a1", (ax+5, ay+20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAG, 2)
                 cv2.imshow(win_preview, top)
 
             key = cv2.waitKey(1) & 0xFF
