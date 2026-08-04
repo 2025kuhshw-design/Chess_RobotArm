@@ -27,6 +27,7 @@ import os
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import hardware.arm_controller as ac
 from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
 from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
 
@@ -74,7 +75,7 @@ def main():
         """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는
         구간에서 흡착이 풀려 기물을 떨어뜨린다."""
         x, y, z = (safe_approach_xyz(col, row, _safe_lift(col, row))
-                   if lift else chess_square_to_xyz(col, row))
+                   if lift else ac.touch_xyz(col, row))
         q = inverse_kinematics(x, y, z)
         arm.move(*q, suction=suction)
         print(f"    → x={x*100:.1f} y={y*100:.1f} z={z*100:.1f} cm  "
@@ -126,7 +127,7 @@ def main():
                 print(f"  {p[1]} 집기 (이후 흡착 유지 — place로 놓을 때까지)")
                 goto(*sq, lift=True)
                 goto(*sq, lift=False)
-                arm.move(*inverse_kinematics(*chess_square_to_xyz(*sq)), suction=True)
+                arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=True)
                 time.sleep(0.6)
                 goto(*sq, lift=True, suction=True)   # 든 채로 상승
                 holding = True
@@ -139,7 +140,7 @@ def main():
                 print(f"  {p[1]}에 놓기")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
                 goto(*sq, lift=False, suction=holding)   # 든 채로 하강
-                arm.move(*inverse_kinematics(*chess_square_to_xyz(*sq)), suction=False)
+                arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=False)
                 time.sleep(0.4)
                 holding = False
                 goto(*sq, lift=True)
@@ -158,12 +159,19 @@ def main():
                     cur = sq
                     print(f"  {p[0]} 위 안전높이로 이동")
                     goto(*sq, lift=True, suction=holding)
+                elif p[0] == "zoff":
+                    # 하강 깊이를 mm 단위로 실시간 조정 (값 찾기용)
+                    if len(p) == 2:
+                        ac.TOUCH_PRESS = float(p[1]) / 1000.0
+                    print(f"  하강 깊이 = 기물 윗면보다 "
+                          f"{ac.TOUCH_PRESS*1000:.1f}mm 더 아래")
+                    print("     (더 내려가려면 'zoff 8', 덜 내려가려면 'zoff 2')")
                 elif p[0] == "suction" and len(p) == 2:
+                    # 현재 서보 각도 그대로 두고 흡착 비트만 바꾼다 (움직이지 않음)
                     holding = (p[1] == "1")
-                    x, y, z = (safe_approach_xyz(*cur, _safe_lift(*cur)) if cur
-                               else chess_square_to_xyz(0, 7))
-                    arm.move(*inverse_kinematics(x, y, z), suction=holding)
-                    print(f"  흡착 {'ON (유지)' if holding else 'OFF'}")
+                    arm._send_cmd(arm._cur[0], arm._cur[1], arm._cur[2], holding)
+                    print(f"  흡착 {'ON (유지)' if holding else 'OFF'} "
+                          f"— 위치 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]} 유지")
                 else:
                     print("  명령: e4 | down | up | pick e2 | place e4 | "
                           "move e2 e4 | home | q")

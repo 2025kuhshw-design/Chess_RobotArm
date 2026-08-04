@@ -18,6 +18,13 @@ CMD_TIMEOUT_SEC  = 3.0         # OK 응답 타임아웃
 SUCTION_ON_WAIT  = 0.5         # 흡착 후 대기 (초)
 SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
 EXPECTED_FW      = "3"         # servo_control.ino 의 FW_VERSION 과 일치해야 함
+
+# 기물을 집으러 하강할 때, 기물 윗면(PIECE_Z)보다 얼마나 더 내려갈지 (m).
+# 흡착컵은 고무라 살짝 눌러야 밀착돼 진공이 걸린다. 또 어깨높이·링크길이
+# 실측 오차도 여기서 함께 흡수한다.
+#   값을 키우면 더 깊이 내려감. 너무 크면 기물을 밀거나 서보에 무리.
+#   test_square에서 'zoff 8' 처럼 mm 단위로 실시간 조정해 값을 찾을 것.
+TOUCH_PRESS      = 0.004       # 4mm 더 눌러 내려감
 LIFT_HEIGHT      = 0.04        # 기본 안전 높이 (m) — 기물 7mm 기준 충분
 LIFT_MIN         = 0.015       # 최소 리프트 (m) — 기물(7mm)보다 커야 함
 
@@ -106,6 +113,13 @@ def _safe_lift(col: int, row: int) -> float:
     """체스 칸 기준 안전 리프트."""
     x, y, _ = chess_square_to_xyz(col, row)
     return _safe_lift_xy(x, y)
+
+
+def touch_xyz(col: int, row: int) -> tuple:
+    """기물을 집거나 놓을 때 하강할 좌표.
+    기물 윗면보다 TOUCH_PRESS 만큼 더 내려가 흡착컵이 눌리도록 한다."""
+    x, y, z = chess_square_to_xyz(col, row)
+    return (x, y, z - TOUCH_PRESS)
 
 
 def interactive_startup(arm, max_angle: int = 180) -> bool:
@@ -383,7 +397,7 @@ class RealArm:
             if lift:
                 x, y, z = safe_approach_xyz(col, row, _safe_lift(col, row))
             else:
-                x, y, z = chess_square_to_xyz(col, row)
+                x, y, z = touch_xyz(col, row)   # 흡착컵이 눌리도록 조금 더 하강
             q1, q2, q3 = inverse_kinematics(x, y, z)
             if rl_correction is not None:
                 q1 += rl_correction[0]
@@ -400,7 +414,7 @@ class RealArm:
         if is_capture:
             _move_to(tc, tr, lift=True)
             _move_to(tc, tr, lift=False)
-            self.move(*inverse_kinematics(*chess_square_to_xyz(tc, tr)), suction=True)
+            self.move(*inverse_kinematics(*touch_xyz(tc, tr)), suction=True)
             time.sleep(SUCTION_ON_WAIT)
             _move_to(tc, tr, lift=True, suction=True)     # 든 채로 상승
             # 잡은 기물은 보드 밖 캡처 구역에 내려놓음 (항상 도달 가능한 위치)
@@ -421,7 +435,7 @@ class RealArm:
         # 2) 출발 칸 하강
         _move_to(fc, fr, lift=False)
         # 3) 흡착기 ON
-        q1, q2, q3 = inverse_kinematics(*chess_square_to_xyz(fc, fr))
+        q1, q2, q3 = inverse_kinematics(*touch_xyz(fc, fr))
         self.move(q1, q2, q3, suction=True)
         time.sleep(SUCTION_ON_WAIT)
         # 4) 안전 높이로 상승 (기물 든 상태 유지)
@@ -431,7 +445,7 @@ class RealArm:
         # 6) 도착 칸 하강 (기물 든 상태 유지)
         _move_to(tc, tr, lift=False, suction=True)
         # 7) 흡착기 OFF — 여기서 처음으로 놓는다
-        q1, q2, q3 = inverse_kinematics(*chess_square_to_xyz(tc, tr))
+        q1, q2, q3 = inverse_kinematics(*touch_xyz(tc, tr))
         self.move(q1, q2, q3, suction=False)
         time.sleep(SUCTION_OFF_WAIT)
         # 8) 안전 높이로 상승
