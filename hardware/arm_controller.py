@@ -17,6 +17,7 @@ INIT_WAIT_SEC    = 2.0         # 아두이노 초기화 대기
 CMD_TIMEOUT_SEC  = 3.0         # OK 응답 타임아웃
 SUCTION_ON_WAIT  = 0.5         # 흡착 후 대기 (초)
 SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
+EXPECTED_FW      = "3"         # servo_control.ino 의 FW_VERSION 과 일치해야 함
 LIFT_HEIGHT      = 0.04        # 기본 안전 높이 (m) — 기물 7mm 기준 충분
 LIFT_MIN         = 0.015       # 최소 리프트 (m) — 기물(7mm)보다 커야 함
 
@@ -264,10 +265,27 @@ class RealArm:
 
         self._ser = serial.Serial(port, baudrate, timeout=CMD_TIMEOUT_SEC)
         time.sleep(INIT_WAIT_SEC)   # 아두이노 리셋 대기
-        # 초기화 완료 메시지 소비
+
+        # 초기화 메시지에서 펌웨어 버전 확인 (.ino 재업로드 누락 감지)
+        banner = ""
         while self._ser.in_waiting:
-            self._ser.readline()
+            banner += self._ser.readline().decode(errors="replace").strip() + " "
         print(f"[ArmController] 시리얼 연결: {port} @ {baudrate}baud")
+
+        fw = None
+        if "fw=" in banner:
+            fw = banner.split("fw=")[1].split()[0]
+        if fw == EXPECTED_FW:
+            print(f"[ArmController] 펌웨어 fw={fw} ✓")
+        else:
+            print("=" * 60)
+            print(f"⚠️ 아두이노 펌웨어가 최신이 아닙니다 "
+                  f"(감지: {fw or '버전 없음(구버전)'} / 필요: {EXPECTED_FW})")
+            print("   Arduino IDE에서 hardware/arduino/servo_control.ino 를")
+            print("   반드시 다시 업로드하세요.")
+            print("   구버전은 부팅 시 서보를 90,90,90으로 '전속력' 이동시켜")
+            print("   기어가 손상될 수 있습니다.")
+            print("=" * 60)
 
     # ─────────────────────────────────────────
     # 라디안 → 서보 각도 변환

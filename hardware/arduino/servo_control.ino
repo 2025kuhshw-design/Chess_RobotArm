@@ -34,6 +34,10 @@
 #define CH_PUMP     4
 #define CH_VALVE    5
 
+// 펌웨어 버전 — 파이썬 쪽(arm_controller.EXPECTED_FW)과 일치해야 한다.
+// .ino를 고칠 때마다 올릴 것. 재업로드를 잊으면 파이썬이 경고해 준다.
+#define FW_VERSION "3"
+
 #define BAUD_RATE     9600
 #define ANGLE_MIN     0
 #define ANGLE_MAX     180
@@ -107,7 +111,8 @@ void setup() {
   pwm.setPWM(CH_JOINT3, 0, 0);
   lastCmdTime = millis();
 
-  Serial.println("READY");
+  Serial.print("READY fw=");
+  Serial.println(FW_VERSION);
 }
 
 // ─────────────────────────────────────────
