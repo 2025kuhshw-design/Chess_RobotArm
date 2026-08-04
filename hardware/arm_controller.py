@@ -377,7 +377,9 @@ class RealArm:
         from_sq, to_sq = (col, row)
         rl_correction = (delta_q1, delta_q2, delta_q3) or None
         """
-        def _move_to(col, row, lift=False):
+        # ⚠️ suction 인자를 반드시 넘길 것. 기본값(False)으로 두면 기물을
+        #    든 채 이동하는 구간에서 흡착이 풀려 기물을 떨어뜨린다.
+        def _move_to(col, row, lift=False, suction=False):
             if lift:
                 x, y, z = safe_approach_xyz(col, row, _safe_lift(col, row))
             else:
@@ -387,7 +389,7 @@ class RealArm:
                 q1 += rl_correction[0]
                 q2 += rl_correction[1]
                 q3 += rl_correction[2]
-            self.move(q1, q2, q3)
+            self.move(q1, q2, q3, suction=suction)
 
         fc, fr = from_sq
         tc, tr = to_sq
@@ -400,17 +402,17 @@ class RealArm:
             _move_to(tc, tr, lift=False)
             self.move(*inverse_kinematics(*chess_square_to_xyz(tc, tr)), suction=True)
             time.sleep(SUCTION_ON_WAIT)
-            _move_to(tc, tr, lift=True)
+            _move_to(tc, tr, lift=True, suction=True)     # 든 채로 상승
             # 잡은 기물은 보드 밖 캡처 구역에 내려놓음 (항상 도달 가능한 위치)
             x_out, y_out, z_out = capture_slot_xyz(self._captured_count)
             self._captured_count += 1
             lift_out = _safe_lift_xy(x_out, y_out)
             q_out = inverse_kinematics(x_out, y_out, z_out + lift_out)
-            self.move(*q_out, suction=True)
+            self.move(*q_out, suction=True)               # 든 채로 이동
             q_down = inverse_kinematics(x_out, y_out, z_out)
-            self.move(*q_down, suction=True)
+            self.move(*q_down, suction=True)              # 든 채로 하강
             time.sleep(SUCTION_OFF_WAIT)
-            self.move(*q_down, suction=False)
+            self.move(*q_down, suction=False)             # 여기서 놓음
             time.sleep(SUCTION_OFF_WAIT)
             self.move(*q_out, suction=False)
 
@@ -422,13 +424,13 @@ class RealArm:
         q1, q2, q3 = inverse_kinematics(*chess_square_to_xyz(fc, fr))
         self.move(q1, q2, q3, suction=True)
         time.sleep(SUCTION_ON_WAIT)
-        # 4) 안전 높이로 상승
-        _move_to(fc, fr, lift=True)
-        # 5) 도착 칸 위 안전 높이
-        _move_to(tc, tr, lift=True)
-        # 6) 도착 칸 하강
-        _move_to(tc, tr, lift=False)
-        # 7) 흡착기 OFF
+        # 4) 안전 높이로 상승 (기물 든 상태 유지)
+        _move_to(fc, fr, lift=True, suction=True)
+        # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
+        _move_to(tc, tr, lift=True, suction=True)
+        # 6) 도착 칸 하강 (기물 든 상태 유지)
+        _move_to(tc, tr, lift=False, suction=True)
+        # 7) 흡착기 OFF — 여기서 처음으로 놓는다
         q1, q2, q3 = inverse_kinematics(*chess_square_to_xyz(tc, tr))
         self.move(q1, q2, q3, suction=False)
         time.sleep(SUCTION_OFF_WAIT)

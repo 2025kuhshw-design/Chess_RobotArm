@@ -67,15 +67,18 @@ def main():
             arm.close()
             print("[test_square] 기동 중단."); return
 
-    cur = None      # 현재 대상 칸 (col,row)
+    cur = None       # 현재 대상 칸 (col,row)
+    holding = False  # 기물을 흡착해 들고 있는 중인가
 
-    def goto(col, row, lift):
+    def goto(col, row, lift, suction=False):
+        """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는
+        구간에서 흡착이 풀려 기물을 떨어뜨린다."""
         x, y, z = (safe_approach_xyz(col, row, _safe_lift(col, row))
                    if lift else chess_square_to_xyz(col, row))
         q = inverse_kinematics(x, y, z)
-        arm.move(*q)
+        arm.move(*q, suction=suction)
         print(f"    → x={x*100:.1f} y={y*100:.1f} z={z*100:.1f} cm  "
-              f"(서보 {arm._rad_to_servo(*q)})")
+              f"(서보 {arm._rad_to_servo(*q)}){'  [흡착 유지]' if suction else ''}")
 
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 38 140 180 | home | q")
@@ -113,19 +116,20 @@ def main():
                     print("  먼저 칸을 지정하세요 (예: e5)")
                     continue
                 print(f"  {'하강' if p[0]=='down' else '상승'}")
-                goto(cur[0], cur[1], lift=(p[0] == "up"))
+                goto(cur[0], cur[1], lift=(p[0] == "up"), suction=holding)
 
             elif p[0] == "pick" and len(p) == 2:
                 sq = parse_square(p[1])
                 if not sq:
                     print("  칸 이름 오류 (예: e2)"); continue
                 cur = sq
-                print(f"  {p[1]} 집기")
+                print(f"  {p[1]} 집기 (이후 흡착 유지 — place로 놓을 때까지)")
                 goto(*sq, lift=True)
                 goto(*sq, lift=False)
                 arm.move(*inverse_kinematics(*chess_square_to_xyz(*sq)), suction=True)
                 time.sleep(0.6)
-                goto(*sq, lift=True)
+                goto(*sq, lift=True, suction=True)   # 든 채로 상승
+                holding = True
 
             elif p[0] == "place" and len(p) == 2:
                 sq = parse_square(p[1])
@@ -133,10 +137,11 @@ def main():
                     print("  칸 이름 오류 (예: e4)"); continue
                 cur = sq
                 print(f"  {p[1]}에 놓기")
-                goto(*sq, lift=True)
-                goto(*sq, lift=False)
+                goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
+                goto(*sq, lift=False, suction=holding)   # 든 채로 하강
                 arm.move(*inverse_kinematics(*chess_square_to_xyz(*sq)), suction=False)
                 time.sleep(0.4)
+                holding = False
                 goto(*sq, lift=True)
 
             elif p[0] == "move" and len(p) == 3:
@@ -152,7 +157,13 @@ def main():
                 if sq:
                     cur = sq
                     print(f"  {p[0]} 위 안전높이로 이동")
-                    goto(*sq, lift=True)
+                    goto(*sq, lift=True, suction=holding)
+                elif p[0] == "suction" and len(p) == 2:
+                    holding = (p[1] == "1")
+                    x, y, z = (safe_approach_xyz(*cur, _safe_lift(*cur)) if cur
+                               else chess_square_to_xyz(0, 7))
+                    arm.move(*inverse_kinematics(x, y, z), suction=holding)
+                    print(f"  흡착 {'ON (유지)' if holding else 'OFF'}")
                 else:
                     print("  명령: e4 | down | up | pick e2 | place e4 | "
                           "move e2 e4 | home | q")
