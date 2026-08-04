@@ -4,6 +4,8 @@
 """
 
 import math
+import os
+import json
 import numpy as np
 
 # ─────────────────────────────────────────
@@ -95,6 +97,37 @@ def forward_kinematics(q1: float, q2: float, q3: float,
 # ─────────────────────────────────────────
 # 함수 3: 체스 칸 → 월드 xyz
 # ─────────────────────────────────────────
+# ─────────────────────────────────────────
+# 실측 보정 (hardware/calibrate_board.py 가 만든 파일)
+# ─────────────────────────────────────────
+# 로봇이 실제로 짚는 위치와 목표의 차이를 1차식으로 모델링한 계수.
+# 파일이 없으면 보정 없이 동작한다(기존과 동일).
+_BOARD_FIT_PATH = os.path.join(os.path.dirname(__file__), "..", "vision", "board_fit.json")
+_BOARD_FIT = None
+try:
+    if os.path.exists(_BOARD_FIT_PATH):
+        with open(_BOARD_FIT_PATH) as _f:
+            _BOARD_FIT = json.load(_f)
+        print(f"[IK] 보드 실측 보정 적용 ({_BOARD_FIT.get('mode')}, "
+              f"{_BOARD_FIT.get('n_samples')}점)")
+except Exception as _e:      # 손상된 파일이 조용히 무시되지 않도록 알린다
+    print(f"[IK] board_fit.json 읽기 실패 → 보정 없이 진행: {_e}")
+    _BOARD_FIT = None
+
+
+def apply_board_fit(x: float, y: float) -> tuple:
+    """실측 보정을 적용한 (x, y). 보정 파일이 없으면 그대로 반환.
+
+    측정된 오차(실제 - 목표)를 목표 좌표에서 빼주면 실제가 목표에 맞는다.
+    """
+    if _BOARD_FIT is None:
+        return (x, y)
+    cx, cy = _BOARD_FIT["coef_x"], _BOARD_FIT["coef_y"]
+    dx = cx[0] * x + cx[1] * y + cx[2]
+    dy = cy[0] * x + cy[1] * y + cy[2]
+    return (x - dx, y - dy)
+
+
 def chess_square_to_xyz(col: int, row: int) -> tuple:
     """
     체스 칸 (col=0~7, row=0~7) → 월드 좌표 (x, y, z) [m]
@@ -110,6 +143,7 @@ def chess_square_to_xyz(col: int, row: int) -> tuple:
     """
     x = BOARD_ORIGIN_X + (7 - row) * CELL_SIZE + CELL_SIZE / 2
     y = BOARD_ORIGIN_Y + col * CELL_SIZE + CELL_SIZE / 2
+    x, y = apply_board_fit(x, y)      # 실측 보정 (파일 없으면 그대로)
     z = PIECE_Z
     return (x, y, z)
 

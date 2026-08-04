@@ -11,3 +11,6 @@ vision/calibration.json
 
 # 정적분 발표 운동 로그 (실측 데이터는 USB/로컬 보관)
 analysis/logs/*.csv
+
+# 실측 보정 결과 (설치 환경마다 다름)
+vision/board_fit.json
