@@ -114,12 +114,18 @@ class CameraCalibrator:
                 for i in range(1, 8):
                     cv2.line(top, (i*cell, 0), (i*cell, PREVIEW_SIZE), (0,255,0), 1)
                     cv2.line(top, (0, i*cell), (PREVIEW_SIZE, i*cell), (0,255,0), 1)
-                # 원점 힌트: 좌상 칸이 a1(로봇 원점)이 되도록 클릭해야 함
-                cv2.rectangle(top, (1, 1), (cell-1, cell-1), (255,0,255), 2)
-                cv2.putText(top, "a1", (4, 20),
+                # 방향 힌트: 코너 3·4 변(아래쪽)이 로봇과 가까운 쪽이어야 함
+                # (vision/detect.py 의 ROBOT_SIDE = "bottom" 기준)
+                cv2.line(top, (0, PREVIEW_SIZE-2), (PREVIEW_SIZE, PREVIEW_SIZE-2),
+                         (255,0,255), 4)
+                cv2.putText(top, "ROBOT THIS SIDE (corners 3-4)",
+                            (6, PREVIEW_SIZE-10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
-                cv2.putText(top, "<- this corner must be ROBOT a1",
-                            (cell+4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,0,255), 1)
+                # a1 = 우하(코너 3) 칸
+                cv2.rectangle(top, (PREVIEW_SIZE-cell+1, PREVIEW_SIZE-cell+1),
+                              (PREVIEW_SIZE-2, PREVIEW_SIZE-2), (255,0,255), 2)
+                cv2.putText(top, "a1", (PREVIEW_SIZE-cell+5, PREVIEW_SIZE-cell+20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 2)
                 cv2.imshow(win_preview, top)
 
             key = cv2.waitKey(1) & 0xFF

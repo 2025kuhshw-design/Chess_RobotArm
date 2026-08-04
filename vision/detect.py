@@ -26,6 +26,39 @@ PIECE_VAR_THRESH = 200
 LABEL_COLOR  = (0, 215, 255)    # 칸 좌표 라벨: 노랑
 ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
 
+# ─────────────────────────────────────────
+# 보드 방향: 탑뷰에서 로봇팔이 어느 쪽에 있는가
+# ─────────────────────────────────────────
+# 캘리브레이션 클릭 순서는 1=좌상 2=우상 3=우하 4=좌하 이고,
+# 탑뷰에서 그 순서대로 좌상/우상/우하/좌하에 배치된다.
+#   "bottom" → 로봇이 아래쪽(코너 3·4 변)   ← 현재 배치
+#   "top"    → 로봇이 위쪽(코너 1·2 변)
+#   "left"   → 로봇이 왼쪽(코너 1·4 변)
+#   "right"  → 로봇이 오른쪽(코너 2·3 변)
+#
+# 로봇 좌표계(utils/ik_solver.py): 파일 a→h 는 로봇에서 멀어지는 방향(+x),
+# 랭크 1→8 은 로봇 기준 왼쪽(+y). 위에서 내려다본 화면이므로 이 두 축의
+# 화면상 방향이 ROBOT_SIDE 에 따라 결정된다.
+ROBOT_SIDE = "bottom"
+
+
+def chess_to_grid(col: int, row: int) -> tuple:
+    """체스 좌표(col=파일 0~7, row=랭크 0~7) → 탑뷰 격자 인덱스 (gx, gy).
+    gx=왼쪽부터 0~7, gy=위부터 0~7."""
+    if ROBOT_SIDE == "bottom":
+        # 로봇 아래 → 파일은 위로, 랭크는 왼쪽으로
+        return (7 - row, 7 - col)
+    if ROBOT_SIDE == "top":
+        # 로봇 위 → 파일은 아래로, 랭크는 오른쪽으로
+        return (row, col)
+    if ROBOT_SIDE == "left":
+        # 로봇 왼쪽 → 파일은 오른쪽으로, 랭크는 위로
+        return (col, 7 - row)
+    if ROBOT_SIDE == "right":
+        # 로봇 오른쪽 → 파일은 왼쪽으로, 랭크는 아래로
+        return (7 - col, row)
+    raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
+
 
 class ChessBoardDetector:
     def __init__(self, calibration_path: str = CALIB_PATH, camera_index: int = 0):
@@ -100,8 +133,10 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     def get_board_state(self) -> list:
         """
-        현재 프레임 캡처 → 8×8 보드 상태 반환
+        현재 프레임 캡처 → 8×8 보드 상태 반환.
         board[row][col] ∈ {"empty", "white", "black"}
+        ⚠️ 인덱스는 **체스/로봇 좌표**다 (col=파일 a~h, row=랭크 1~8).
+           화면 격자 위치는 chess_to_grid()로 변환해 읽는다.
         """
         ret, frame = self.cap.read()
         if not ret:
@@ -113,12 +148,11 @@ class ChessBoardDetector:
         for row in range(8):
             board_row = []
             for col in range(8):
-                x1 = col * CELL_SIZE_PX
-                y1 = row * CELL_SIZE_PX
-                x2 = x1 + CELL_SIZE_PX
-                y2 = y1 + CELL_SIZE_PX
-                cell_img = top[y1:y2, x1:x2]
-                is_white_sq = (row + col) % 2 == 0
+                gx, gy = chess_to_grid(col, row)
+                x1 = gx * CELL_SIZE_PX
+                y1 = gy * CELL_SIZE_PX
+                cell_img = top[y1:y1 + CELL_SIZE_PX, x1:x1 + CELL_SIZE_PX]
+                is_white_sq = (gx + gy) % 2 == 0
                 state = self._classify_cell(cell_img, is_white_sq)
                 board_row.append(state)
             board.append(board_row)
@@ -192,13 +226,14 @@ class ChessBoardDetector:
             cv2.line(top, (i*CELL_SIZE_PX, 0), (i*CELL_SIZE_PX, TOP_SIZE), (0,255,0), 1)
             cv2.line(top, (0, i*CELL_SIZE_PX), (TOP_SIZE, i*CELL_SIZE_PX), (0,255,0), 1)
 
-        # 기물 표시
+        # 기물 표시 (board는 체스 좌표 → 화면 위치로 변환)
         if board:
             for row in range(8):
                 for col in range(8):
                     state = board[row][col]
-                    cx = col * CELL_SIZE_PX + CELL_SIZE_PX // 2
-                    cy = row * CELL_SIZE_PX + CELL_SIZE_PX // 2
+                    gx, gy = chess_to_grid(col, row)
+                    cx = gx * CELL_SIZE_PX + CELL_SIZE_PX // 2
+                    cy = gy * CELL_SIZE_PX + CELL_SIZE_PX // 2
                     if state == "white":
                         cv2.circle(top, (cx, cy), 15, (255,255,255), -1)
                         cv2.circle(top, (cx, cy), 15, (0,0,0), 1)
@@ -209,8 +244,9 @@ class ChessBoardDetector:
         if show_labels:
             for row in range(8):
                 for col in range(8):
-                    x1 = col * CELL_SIZE_PX
-                    y1 = row * CELL_SIZE_PX
+                    gx, gy = chess_to_grid(col, row)
+                    x1 = gx * CELL_SIZE_PX
+                    y1 = gy * CELL_SIZE_PX
                     # 체스 표기: col→파일(a-h), row→랭크(1-8)
                     notation = f"{chr(ord('a') + col)}{row + 1}"
 
@@ -228,11 +264,13 @@ class ChessBoardDetector:
                     cv2.putText(top, f"{col},{row}", (x1+3, y1+CELL_SIZE_PX-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200,200,200), 1)
 
-            # 축 방향 안내
-            cv2.putText(top, "col-> (files a-h)", (5, TOP_SIZE-3),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, LABEL_COLOR, 1)
-            cv2.putText(top, "a1 = ROBOT ORIGIN", (TOP_SIZE-185, 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, ORIGIN_COLOR, 1)
+            # 축 방향 안내 — 로봇이 있는 변을 표시
+            side_txt = {"bottom": "ROBOT THIS SIDE (v)", "top": "ROBOT THIS SIDE (^)",
+                        "left": "ROBOT <", "right": "> ROBOT"}[ROBOT_SIDE]
+            pos = {"bottom": (5, TOP_SIZE-6), "top": (5, 16),
+                   "left": (5, TOP_SIZE//2), "right": (TOP_SIZE-95, TOP_SIZE//2)}[ROBOT_SIDE]
+            cv2.putText(top, side_txt, pos,
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, ORIGIN_COLOR, 2)
 
         return top
 
