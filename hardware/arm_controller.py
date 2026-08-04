@@ -121,15 +121,23 @@ def interactive_startup(arm, max_angle: int = 180) -> bool:
 
     반환: True=정상 완료, False=사용자가 중단.
     """
-    print("\n" + "=" * 52)
+    P = PARK_POSE
+    print("\n" + "=" * 56)
     print(" 기동 절차 (팔이 처진 상태에서 안전하게 시작)")
-    print("=" * 52)
-    print("  1) engage 38 140 180   지금 팔이 있는 각도를 알려줌 (안 움직임)")
-    print("  2) 40 130 170 / s2 120 천천히 이동 (램프 적용)")
-    print("     park                PARK 자세로 천천히 이동")
-    print("  3) start               세팅 완료 → 진행")
-    print("     q                   중단")
-    print(f"  ※ PARK_POSE = A{PARK_POSE[0]},{PARK_POSE[1]},{PARK_POSE[2]}")
+    print("=" * 56)
+    print(" ⭐ 가장 쉬운 방법:")
+    print(f"    팔을 손으로 Z자 자세로 잡은 채 → 'engage' 입력")
+    print(f"    (= engage {P[0]} {P[1]} {P[2]} 와 동일. 실제와 맞으니 안 움직임)")
+    print()
+    print("  engage             팔이 지금 Z자(PARK)에 있다고 선언")
+    print("  engage <a> <b> <c> 다른 각도에 있으면 그 값으로 선언")
+    print("  <a b c> / s2 120   천천히 이동 (램프 적용)")
+    print("  park               PARK 자세로 천천히 이동")
+    print("  start              세팅 완료 → 진행")
+    print("  q                  중단")
+    print(f"  ※ PARK_POSE = A{P[0]},{P[1]},{P[2]}")
+    print("  ⚠️ engage 값이 실제 위치와 다르면 그 차이만큼 서보가 튑니다.")
+    print("     크게 움직였다면 값이 틀린 것 → 멈춘 그 위치를 다시 engage.")
     print("  🛑 긁는 소리 나면 즉시 Ctrl+C → 전원 차단\n")
 
     engaged = False
@@ -155,14 +163,17 @@ def interactive_startup(arm, max_angle: int = 180) -> bool:
                 print(f"  세팅 완료. 현재 위치 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}")
                 return True
 
-            if p[0] == "engage" and len(p) == 4:
-                pose = [max(0, min(max_angle, int(v))) for v in p[1:]]
+            if p[0] == "engage" and len(p) in (1, 4):
+                # 인자 없으면 PARK(Z자)에 있다고 간주 — 손으로 잡고 쓰는 경우
+                pose = (list(PARK_POSE) if len(p) == 1
+                        else [max(0, min(max_angle, int(v))) for v in p[1:]])
                 arm._cur = list(pose)
                 # 같은 값을 한 번만 보내 서보에 힘만 들어오게 한다
                 arm._send_cmd(pose[0], pose[1], pose[2], False)
                 engaged = True
                 print(f"  A{pose[0]},{pose[1]},{pose[2]} 로 고정 (움직임 없어야 정상)")
-                print("  → 크게 움직였다면 값이 실제와 다른 것. 그 위치를 다시 engage 하세요.")
+                print("  → 크게 움직였다면 값이 실제와 다른 것. "
+                      "멈춘 그 위치를 다시 engage 하세요.")
                 continue
 
             if not engaged:
