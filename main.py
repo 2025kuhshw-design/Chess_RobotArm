@@ -56,6 +56,60 @@ def load_rl_model():
 # ─────────────────────────────────────────
 # 게임 루프
 # ─────────────────────────────────────────
+def read_human_move(detector, board):
+    """카메라로 사람이 둔 수를 읽는다. 실패하면 직접 입력받는다.
+
+    합법수마다 '그 수를 뒀을 때의 배치'를 만들어 화면과 대조하고, 가장 잘
+    맞는 것을 고른다. 칸 몇 개를 잘못 읽어도 정답이 살아남고, 기물을 잡는
+    수(도착칸이 원래 차 있던 경우)도 제대로 읽힌다.
+    """
+    from vision.detect import board_to_state, format_state
+
+    print("  수를 두고 Enter를 누르세요 (u=직접 입력, s=화면 확인) > ", end="", flush=True)
+    ans = input().strip().lower()
+
+    if ans == "u":
+        return _ask_uci(board)
+
+    move, score, cands = detector.detect_move_with_rules(board)
+
+    if ans == "s" or move is None:
+        obs = getattr(detector, "_last_observed", None)
+        if obs is not None:
+            print("  카메라가 본 배치 (대문자=현재 기보와 다른 칸):")
+            print(format_state(obs, board_to_state(board)))
+
+    if move is not None:
+        gap = score - cands[1][0] if len(cands) > 1 else score
+        print(f"  이동 감지: {move.uci()}  (2위 후보보다 {gap:.1f}점 앞섬)")
+        return move
+
+    # 확신이 없으면 후보를 보여주고 사람이 고른다 — 게임이 멈추지 않게.
+    if not cands:
+        print("  [경고] 화면이 안정되지 않았습니다 (팔·손이 보드를 가리는 중?)")
+        return None
+    print("  어느 수인지 확신이 서지 않습니다. 가장 비슷한 후보:")
+    for i, (sc, mv) in enumerate(cands[:5], 1):
+        print(f"    {i}) {mv.uci()}   일치도 {sc:.1f}")
+    sel = input("  번호를 고르거나 수를 직접 입력하세요 (예: 1 또는 e2e4) > ").strip()
+    if sel.isdigit() and 1 <= int(sel) <= min(5, len(cands)):
+        return cands[int(sel) - 1][1]
+    try:
+        mv = chess.Move.from_uci(sel)
+        return mv if mv in board.legal_moves else None
+    except Exception:
+        return None
+
+
+def _ask_uci(board):
+    uci = input("  수를 입력하세요 (예: e2e4) > ").strip()
+    try:
+        mv = chess.Move.from_uci(uci)
+    except Exception:
+        return None
+    return mv if mv in board.legal_moves else None
+
+
 def run_game(args, arm, detector, rl_model):
     from utils.ik_solver   import inverse_kinematics, chess_square_to_xyz
     from utils.lagrange    import check_torque_feasibility
@@ -86,14 +140,9 @@ def run_game(args, arm, detector, rl_model):
                     arm.home()
                 except Exception as e:
                     print(f"  [경고] park 복귀 실패: {e}")
-                result = None
-                while result is None:
-                    result = detector.detect_human_move()
-                from_sq, to_sq = result
-                move = chess.Move(
-                    chess.square(from_sq[0], from_sq[1]),
-                    chess.square(to_sq[0],   to_sq[1]),
-                )
+                move = read_human_move(detector, board)
+                if move is None:
+                    continue
             else:
                 while True:
                     uci = input("당신의 수를 입력하세요 (예: e2e4): ").strip()
@@ -192,6 +241,9 @@ def main():
                         help="스텝 간 대기(s). 클수록 느리고 안전")
     parser.add_argument("--no-startup", action="store_true",
                         help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
+    parser.add_argument("--view", action="store_true",
+                        help="카메라 화면을 계속 띄운다 (test_square의 show와 동일). "
+                             "인식 상태를 눈으로 보며 진행할 수 있다")
     parser.add_argument("--confirm", action="store_true",
                         help="집기/놓기 전에 칸 위에서 멈춰 사람 확인을 받는다 "
                              "(첫 실전 권장. 카메라 자동보정이 아니라 육안 확인)")
@@ -251,12 +303,21 @@ def main():
 
     # 카메라 + 캘리브레이션
     detector = None
+    live = None
     if os.path.exists(CALIB_PATH):
         try:
             from vision.detect import ChessBoardDetector
             detector = ChessBoardDetector(CALIB_PATH, args.camera)
-            board_state = detector.get_board_state()
+            detector.get_board_state()
             print(f"[카메라] 체스판 인식 완료")
+            if args.view:
+                # 라이브 뷰가 카메라 읽기를 독점하므로, 인식은 프록시를 통해
+                # 그 최신 프레임을 빌려 쓴다 (프레임 뺏김 방지).
+                from vision.live_view import LiveView, DetectorProxy
+                live = LiveView(detector)
+                live.start()
+                detector = DetectorProxy(detector, live)
+                print("[카메라] 라이브 뷰 켜짐 — 창을 닫지 마세요")
         except Exception as e:
             print(f"[카메라] 초기화 실패: {e} → 터미널 입력 모드로 대체")
             detector = None
@@ -266,6 +327,8 @@ def main():
     try:
         run_game(args, arm, detector, rl_model)
     finally:
+        if live is not None:
+            live.stop()
         if detector:
             detector.close()
         arm.close()

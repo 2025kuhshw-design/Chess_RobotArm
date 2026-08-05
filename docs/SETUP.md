@@ -645,19 +645,24 @@ PIECE_Z         = 0.007   # 기물 높이 7mm (실측)
 ```bash
 venv\Scripts\activate
 python main.py --mode real --port COM5 ^
-    --stockfish C:\...\stockfish\stockfish-windows-x86-64-avx2.exe --camera 0 ^
-    --step 1 --step-delay 0.1
+    --stockfish C:\...\stockfish\stockfish-windows-x86-64-avx2.exe --camera 1 ^
+    --view --step 1 --step-delay 0.1
 ```
 
 실행하면 **기동 절차**(8-A)가 먼저 뜬다 → 팔을 Z자로 잡고 `engage` → `start`.
 동작이 검증된 뒤에는 속도 옵션을 빼거나 올려도 된다(8-B).
 
 
+- `--view` 를 주면 **카메라 창이 계속 떠 있다** (test_square의 `show`와 같다).
+  라이브 뷰 스레드가 카메라를 독점하고, 인식은 그 최신 프레임을 빌려 쓴다.
 - 사람(WHITE) 차례 → **실제로 말을 옮기고** Enter → 카메라가 인식
   - ⚠️ `e2e4` 같은 **글자를 치는 게 아니다.** 물리적으로 옮겨야 한다.
-  - 첫 Enter는 현재 상태를 기준으로 저장하는 용도다.
+  - Enter 대신 `u` = 수를 직접 입력, `s` = 카메라가 본 배치를 표로 확인.
+  - 인식은 **합법수 대조** 방식이다. 지금 국면의 합법수(보통 20~40개)마다
+    "그 수를 뒀다면 판이 어떻게 보일지"를 만들어 화면과 견주고, 가장 잘
+    맞는 것을 고른다. 칸 몇 개를 잘못 읽어도 정답이 살아남는다.
+  - 1등과 2등이 비슷하면 **후보 5개를 보여주고 사람이 고른다.** 게임이 멈추지 않는다.
 - 로봇(BLACK) 차례 → Stockfish → IK → (모델 있으면) RL 보정 → 집기→이동→놓기→park 복귀
-- `--mode real`은 카메라 창을 띄우지 않는다. 인식을 눈으로 보려면 별도 창에서 `--mode vision`.
 
 > 🛑 첫 실전: 전원 차단 스위치를 손에, 처음엔 RL 보정 없이 IK만으로 검증 후 켜기.
 

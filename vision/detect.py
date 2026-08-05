@@ -76,6 +76,47 @@ MARKER_RETRY    = 5       # 마커를 못 찾았을 때 새 프레임으로 재�
 MARKER_OFFSET_COL = 0.0
 MARKER_OFFSET_ROW = 0.0
 
+# ─────────────────────────────────────────
+# 사람 수 인식 (합법수 대조 방식)
+# ─────────────────────────────────────────
+# 1등 후보가 2등보다 이만큼 앞서야 '확실하다'고 본다.
+# 64점 만점 채점이므로 1.0 = 칸 하나 차이. 낮추면 자동으로 넘어가는 대신
+# 오인식이 늘고, 높이면 사람에게 묻는 횟수가 는다.
+MOVE_MATCH_MARGIN = 1.0
+# 색(흑/백)까지 맞았을 때 주는 추가 점수. 색 분류는 조명에 민감해 자주
+# 틀리므로, 있다/없다(1.0)보다 낮게 둔다.
+COLOR_MATCH_WEIGHT = 0.5
+
+
+def board_to_state(board) -> list:
+    """chess.Board → get_board_state 와 같은 형식의 8×8 배열."""
+    import chess
+    st = []
+    for row in range(8):
+        r = []
+        for col in range(8):
+            p = board.piece_at(chess.square(col, row))
+            r.append("empty" if p is None
+                     else ("white" if p.color == chess.WHITE else "black"))
+        st.append(r)
+    return st
+
+
+def format_state(state, other=None) -> str:
+    """8×8 배치를 사람이 읽을 수 있게. other 를 주면 다른 칸을 대문자로 표시."""
+    sym = {"empty": ".", "white": "w", "black": "b"}
+    lines = []
+    for row in range(7, -1, -1):
+        cells = []
+        for col in range(8):
+            c = sym[state[row][col]]
+            if other is not None and state[row][col] != other[row][col]:
+                c = c.upper() if c != "." else "X"
+            cells.append(c)
+        lines.append(f"  {row+1} " + " ".join(cells))
+    lines.append("    " + " ".join("abcdefgh"))
+    return "\n".join(lines)
+
 
 def chess_to_grid(col: int, row: int) -> tuple:
     """체스 좌표(col=파일 0~7, row=랭크 0~7) → 탑뷰 격자 인덱스 (gx, gy).
@@ -190,16 +231,19 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 1: 현재 보드 상태 반환
     # ─────────────────────────────────────────
-    def get_board_state(self) -> list:
+    def get_board_state(self, frame=None) -> list:
         """
         현재 프레임 캡처 → 8×8 보드 상태 반환.
         board[row][col] ∈ {"empty", "white", "black"}
         ⚠️ 인덱스는 **체스/로봇 좌표**다 (col=파일 a~h, row=랭크 1~8).
            화면 격자 위치는 chess_to_grid()로 변환해 읽는다.
+
+        frame 을 주면 그 프레임으로 읽는다(라이브 뷰가 카메라를 점유 중일 때).
         """
-        ret, frame = self.cap.read()
-        if not ret:
-            raise RuntimeError("카메라 프레임 읽기 실패")
+        if frame is None:
+            ret, frame = self.cap.read()
+            if not ret:
+                raise RuntimeError("카메라 프레임 읽기 실패")
 
         top   = self._get_top_view(frame)
         board = []
@@ -218,16 +262,18 @@ class ChessBoardDetector:
 
         return board
 
-    def get_stable_board_state(self, tries: int = 6):
+    def get_stable_board_state(self, tries: int = 6, frame_src=None):
         """연속 두 번 같게 읽힐 때만 결과를 돌려준다.
 
         팔·손이 지나가거나 조명이 흔들리는 순간에 읽으면 엉뚱한 배열이 나온다.
         같은 결과가 두 번 연달아 나와야 '안정된 상태'로 본다.
         끝내 안정되지 않으면 None.
+
+        frame_src: 매번 새 프레임을 돌려주는 콜러블(라이브 뷰 공유용).
         """
         prev = None
         for _ in range(tries):
-            cur = self.get_board_state()
+            cur = self.get_board_state(frame_src() if frame_src else None)
             if prev is not None and cur == prev:
                 return cur
             prev = cur
@@ -235,12 +281,69 @@ class ChessBoardDetector:
         return None
 
     # ─────────────────────────────────────────
-    # 메서드 2: 사람 이동 감지
+    # 메서드 2-A: 규칙을 아는 상태에서의 이동 감지 (권장)
+    # ─────────────────────────────────────────
+    def detect_move_with_rules(self, board, frame_src=None):
+        """합법수 중 '현재 화면과 가장 잘 맞는 수'를 고른다 → chess.Move.
+
+        왜 이 방식인가:
+          이전 방식은 '사라진 칸 1개 + 나타난 칸 1개'를 찾는 차분(diff)이었다.
+          그런데 칸 하나만 잘못 읽혀도 조건이 깨져 매번 실패했고,
+          기물을 잡는 수(도착칸이 원래 차 있음)는 원리적으로 못 읽었다.
+
+          지금은 규칙을 이미 안다는 점을 이용한다. 합법수는 보통 20~40개뿐이고,
+          각 수를 뒀을 때의 배치를 미리 알 수 있다. 그중 화면과 가장 비슷한
+          것을 고르면, 몇 칸을 잘못 읽어도 정답이 살아남는다.
+
+        반환: (chess.Move, 점수, 후보목록) 또는 (None, 0, 후보목록)
+        """
+        import chess
+
+        observed = self.get_stable_board_state(frame_src=frame_src)
+        if observed is None:
+            return None, 0.0, []
+
+        cands = []
+        for mv in board.legal_moves:
+            board.push(mv)
+            cands.append((self._state_score(observed, board_to_state(board)), mv))
+            board.pop()
+        if not cands:
+            return None, 0.0, []
+
+        cands.sort(key=lambda t: -t[0])
+        best, second = cands[0], (cands[1] if len(cands) > 1 else (-1e9, None))
+        self._last_observed = observed
+
+        # 1등이 2등보다 뚜렷하게 나아야 믿는다. 비슷하면 사람에게 묻는다.
+        if best[0] - second[0] >= MOVE_MATCH_MARGIN:
+            return best[1], best[0], cands
+        return None, best[0], cands
+
+    def _state_score(self, obs, exp) -> float:
+        """관측 배치와 예상 배치가 얼마나 닮았는지 (64점 만점).
+
+        '있다/없다'가 맞으면 큰 점수, 색까지 맞으면 추가 점수를 준다.
+        색 분류는 조명에 민감해 자주 틀리므로 가중치를 낮게 둔다.
+        """
+        s = 0.0
+        for row in range(8):
+            for col in range(8):
+                o, e = obs[row][col], exp[row][col]
+                if (o == "empty") == (e == "empty"):
+                    s += 1.0                       # 점유 여부 일치
+                    if o != "empty" and o == e:
+                        s += COLOR_MATCH_WEIGHT    # 색까지 일치
+        return s
+
+    # ─────────────────────────────────────────
+    # 메서드 2-B: 규칙 없이 차분으로 감지 (예비용)
     # ─────────────────────────────────────────
     def detect_human_move(self) -> tuple:
         """
         엔터 대기 → 이전/현재 보드 비교 → (from_sq, to_sq) 반환
         from_sq, to_sq = (col, row) 형식
+        ⚠️ 칸 하나만 잘못 읽혀도 실패한다. 가능하면 detect_move_with_rules 를 쓸 것.
         """
         print("  수를 두고 Enter를 누르세요...", end="", flush=True)
         input()   # 엔터 대기

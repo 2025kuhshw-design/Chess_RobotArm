@@ -33,6 +33,7 @@ from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
 from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
 import utils.ik_solver as iks
 from hardware.visual_align import align_over_square
+from vision.live_view import LiveView, DetectorProxy
 
 
 def ac_fit_active() -> bool:
@@ -96,89 +97,10 @@ def main():
 
     WIN = "test_square view"
 
-    class LiveView:
-        """백그라운드 스레드로 카메라 창을 계속 띄운다.
+    # 라이브 뷰 / 프레임 공유 프록시는 main.py 와 공유한다 (vision/live_view.py)
+    live = LiveView(detector, WIN) if detector is not None else None
+    det_src = DetectorProxy(detector, live) if detector is not None else None
 
-        input()은 블로킹이라 메인 스레드에서는 GUI 이벤트를 돌릴 수 없다.
-        그래서 별도 스레드가 read→그리기→waitKey 를 반복한다.
-        ⚠️ 카메라를 두 곳에서 읽으면 프레임을 서로 뺏는다. 그래서 이 스레드가
-           읽기를 독점하고, 마커 검출은 여기 저장된 최신 프레임을 쓴다.
-        """
-        def __init__(self, det):
-            import threading
-            self.det = det
-            self._frame = None
-            self._lock = threading.Lock()
-            self._stop = threading.Event()
-            self._th = None
-
-        def start(self):
-            import threading
-            if self._th is not None:
-                return
-            self._stop.clear()
-            self._th = threading.Thread(target=self._loop, daemon=True)
-            self._th.start()
-
-        def stop(self):
-            if self._th is None:
-                return
-            self._stop.set()
-            self._th.join(timeout=2)
-            self._th = None
-            try:
-                import cv2
-                cv2.destroyWindow(WIN)
-                cv2.waitKey(1)
-            except Exception:
-                pass
-
-        @property
-        def running(self):
-            return self._th is not None
-
-        def latest(self):
-            with self._lock:
-                return None if self._frame is None else self._frame.copy()
-
-        def _loop(self):
-            import cv2
-            while not self._stop.is_set():
-                ok, f = self.det.cap.read()
-                if not ok:
-                    continue
-                with self._lock:
-                    self._frame = f
-                try:
-                    cv2.imshow(WIN, self.det.overlay_debug(f))
-                    cv2.waitKey(30)
-                except Exception:
-                    break     # GUI를 못 쓰는 환경이면 조용히 종료
-
-    live = LiveView(detector) if detector is not None else None
-
-    class _DetProxy:
-        """정렬 루틴이 라이브 뷰의 최신 프레임을 쓰도록 감싼다.
-        뷰가 꺼져 있으면 원래대로 detector가 직접 읽는다."""
-        def __init__(self, det, view):
-            self.det, self.view = det, view
-
-        def find_marker(self):
-            if self.view is not None and self.view.running:
-                for _ in range(5):          # 최신 프레임으로 몇 번 재시도
-                    f = self.view.latest()
-                    if f is not None:
-                        r = self.det.find_marker(f)
-                        if r is not None:
-                            return r
-                    time.sleep(0.05)
-                return None
-            return self.det.find_marker()
-
-        def __getattr__(self, k):
-            return getattr(self.det, k)
-
-    det_src = _DetProxy(detector, live) if detector is not None else None
 
     def show_once():
         """프레임 한 장을 창에 갱신. 이동/정렬 중 호출용.
