@@ -218,6 +218,22 @@ class ChessBoardDetector:
 
         return board
 
+    def get_stable_board_state(self, tries: int = 6):
+        """연속 두 번 같게 읽힐 때만 결과를 돌려준다.
+
+        팔·손이 지나가거나 조명이 흔들리는 순간에 읽으면 엉뚱한 배열이 나온다.
+        같은 결과가 두 번 연달아 나와야 '안정된 상태'로 본다.
+        끝내 안정되지 않으면 None.
+        """
+        prev = None
+        for _ in range(tries):
+            cur = self.get_board_state()
+            if prev is not None and cur == prev:
+                return cur
+            prev = cur
+            time.sleep(0.15)
+        return None
+
     # ─────────────────────────────────────────
     # 메서드 2: 사람 이동 감지
     # ─────────────────────────────────────────
@@ -229,7 +245,11 @@ class ChessBoardDetector:
         print("  수를 두고 Enter를 누르세요...", end="", flush=True)
         input()   # 엔터 대기
 
-        current = self.get_board_state()
+        current = self.get_stable_board_state()
+        if current is None:
+            print("  [경고] 화면이 안정되지 않았습니다 "
+                  "(팔이나 손이 보드를 가리는 중?). 다시 시도하세요.")
+            return None
 
         if self._prev_board is None:
             self._prev_board = current

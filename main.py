@@ -73,6 +73,12 @@ def run_game(args, arm, detector, rl_model):
         # ── 사람 차례 ──
         if board.turn == chess.WHITE:
             if detector:
+                # 보드를 읽기 전에 팔을 PARK로 물린다.
+                # 팔이 보드 위에 있으면 카메라를 가려 기물 인식이 깨진다.
+                try:
+                    arm.home()
+                except Exception as e:
+                    print(f"  [경고] park 복귀 실패: {e}")
                 result = None
                 while result is None:
                     result = detector.detect_human_move()
