@@ -252,6 +252,7 @@ def main():
 
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 38 140 180 | home | q")
+    print("  진단: a 60 140 180  ← 서보 각도로 직접 이동 (한 축만 바꿔서 시험)")
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
@@ -277,6 +278,15 @@ def main():
             elif p[0] == "home":
                 print("  park 자세로 복귀")
                 arm.home()
+
+            elif p[0] == "a" and len(p) == 4:
+                # 서보 각도로 직접 이동 (램프 적용). 관절 하나만 바꿔서
+                # '그 모터가 실제로 도는지' 격리 진단할 때 쓴다.
+                tgt = [int(v) for v in p[1:]]
+                print(f"  A{tgt[0]},{tgt[1]},{tgt[2]} 로 이동 "
+                      f"(현재 가정 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]})")
+                arm._ramp_send(tgt[0], tgt[1], tgt[2], holding)
+                print(f"  → 완료. 현재 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}")
 
             elif p[0] == "set" and len(p) == 4:
                 # 움직이지 않고 '현재 위치 가정'만 교정 (첫 명령 슬램 방지)
