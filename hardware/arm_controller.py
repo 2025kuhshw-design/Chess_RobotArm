@@ -47,8 +47,27 @@ CAPTURE_COLS    = 4        # 가로 슬롯 수
 CAPTURE_ROWS    = 2        # 세로 슬롯 수
 
 # 관절 한계 (서보 각도)
+# 펌웨어(servo_control.ino)의 ANGLE_HARD_MAX 와 맞춘 값. 일반 취미용 서보의
+# 표시 규격은 180°지만, 실제로는 200° 근처까지 도는 개체가 많다.
+# ⚠️ 180°를 넘는 구간은 개체마다 다르다. 서보가 기계적 스토퍼에 막히면
+#    멈춘 채로 계속 힘을 주다가 기어가 갈리거나 탄다(실제로 s2에서 겪음).
+#    올리기 전에 반드시 SERVO_MAX_TEST_NOTE 의 절차대로 관절별 실제 한계를
+#    확인하고, 그 값을 SERVO_SAFE_MAX 에 적어 넣을 것.
 SERVO_MIN = 0
-SERVO_MAX = 180
+SERVO_MAX = 200
+
+SERVO_MAX_TEST_NOTE = """
+관절별 실제 상한 확인 절차 (한 관절씩, 기물 없이):
+    python hardware/test_square.py --port COM5
+    square> set <현재 각도 3개>
+    square> a ... 180 ...      ← 목표 관절만 180으로
+    square> a ... 185 ...      ← 5°씩만 올린다
+    square> a ... 190 ...
+  각 단계에서 팔이 '실제로 더 움직였는지' 눈으로 확인한다.
+  더 안 움직이는데 명령만 올라가면 → 거기가 스토퍼. 즉시 되돌리고
+  그 직전 값을 SERVO_SAFE_MAX 에 적는다.
+  '끼익'·'드르륵' 소리가 나면 이미 기어가 갈리는 중 → 즉시 Ctrl+C, 전원 차단.
+"""
 
 # ─────────────────────────────────────────
 # 안전: 관절별 소프트 각도 제한 (도)
@@ -58,8 +77,12 @@ SERVO_MAX = 180
 # 확인한 뒤 좁혀 넣을 것. 예: 어깨(s2)가 40° 밑에서 테이블에 닿으면
 #   SERVO_SAFE_MIN = [0, 40, 0]  처럼 설정.
 # 제한에 걸리면 그 각도로 잘리고 경고를 출력한다(모르고 지나치지 않게).
+#
+# ⚠️ 여기가 실제로 적용되는 상한이다. SERVO_MAX(200)는 "펌웨어가 받아주는
+#    최대"일 뿐이고, 아래 값이 그보다 낮으면 아래 값으로 잘린다.
+#    180 초과 구간을 쓰려면 SERVO_MAX_TEST_NOTE 절차로 확인한 뒤 올릴 것.
 SERVO_SAFE_MIN = [0,   0,   0]     # [베이스, 어깨, 팔꿈치] 최소 허용각
-SERVO_SAFE_MAX = [180, 180, 180]   # [베이스, 어깨, 팔꿈치] 최대 허용각
+SERVO_SAFE_MAX = [180, 180, 180]   # [베이스, 어깨, 팔꿈치] 최대 허용각 (확인 후 상향)
 
 # ─────────────────────────────────────────
 # 안전: 부드러운 램프 이동 (충격/스톨 방지)
@@ -322,13 +345,17 @@ class RealArm:
         s2 = int(round(SERVO2_HOME + SERVO2_DIR * math.degrees(q2)))   # 어깨
         s3 = int(round(SERVO3_HOME + SERVO3_DIR * math.degrees(q3)))   # 팔꿈치
 
+        # 실제 상한은 SERVO_MAX(펌웨어 한계)와 SERVO_SAFE_MAX(확인된 기계 한계)
+        # 중 낮은 쪽이다. 초과분을 조용히 잘라내면 팔이 엉뚱한 데 서 있는데도
+        # '도착했다'고 여기게 되므로, 자르지 않고 실패시킨다.
         out = []
-        for name, v in (("s1", s1), ("s2", s2), ("s3", s3)):
-            if not (SERVO_MIN <= v <= SERVO_MAX):
+        for j, (name, v) in enumerate((("s1", s1), ("s2", s2), ("s3", s3))):
+            lo = max(SERVO_MIN, SERVO_SAFE_MIN[j])
+            hi = min(SERVO_MAX, SERVO_SAFE_MAX[j])
+            if not (lo <= v <= hi):
                 raise ValueError(
-                    f"서보 가동범위 밖: {name}={v} "
-                    f"(허용 {SERVO_MIN}~{SERVO_MAX}). 이 칸은 현재 배치에서 "
-                    f"팔이 닿지 않습니다."
+                    f"서보 가동범위 밖: {name}={v} (허용 {lo}~{hi}). "
+                    f"이 칸은 현재 배치에서 팔이 닿지 않습니다."
                 )
             out.append(v)
         return tuple(out)
