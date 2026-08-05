@@ -252,7 +252,9 @@ def main():
 
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 85 140 180 | home | q")
-    print("  진단: a 110 140 180 ← 서보 각도로 직접 이동 (한 축만 바꿔서 시험)")
+    print("  진단: a 110 140 180  서보 각도로 직접 이동 (한 축만 바꿔 시험)")
+    print("        limit            소프트 제한 보기/바꾸기 (limit max s3 200)")
+    print("        probe s3 180 200 그 관절의 실제 기계 한계를 5도씩 찾아본다")
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
@@ -287,6 +289,80 @@ def main():
                       f"(현재 가정 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]})")
                 arm._ramp_send(tgt[0], tgt[1], tgt[2], holding)
                 print(f"  → 완료. 현재 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}")
+
+            elif p[0] == "limit":
+                # 소프트 제한(SERVO_SAFE_MIN/MAX)을 실행 중에 조정한다.
+                # 한계를 '재는' 동안에는 제한이 방해가 되므로 여기서 풀고,
+                # 확인이 끝나면 그 값을 arm_controller.py 에 적어 넣는다.
+                if len(p) == 1:
+                    print(f"  SERVO_SAFE_MIN = {ac.SERVO_SAFE_MIN}")
+                    print(f"  SERVO_SAFE_MAX = {ac.SERVO_SAFE_MAX}")
+                    print(f"  (펌웨어 절대 한계 SERVO_MAX = {ac.SERVO_MAX})")
+                    print("  사용법: limit max 200 | limit max s3 195 | "
+                          "limit min s2 20")
+                    continue
+                if p[1] not in ("max", "min"):
+                    print("  사용법: limit max 200 | limit max s3 195"); continue
+                arr = ac.SERVO_SAFE_MAX if p[1] == "max" else ac.SERVO_SAFE_MIN
+                if len(p) == 3:                       # 세 관절 모두
+                    arr[:] = [int(p[2])] * 3
+                elif len(p) == 4 and p[2] in ("s1", "s2", "s3"):
+                    arr[int(p[2][1]) - 1] = int(p[3])
+                else:
+                    print("  사용법: limit max 200 | limit max s3 195"); continue
+                print(f"  SERVO_SAFE_MIN = {ac.SERVO_SAFE_MIN}")
+                print(f"  SERVO_SAFE_MAX = {ac.SERVO_SAFE_MAX}")
+                print("  ⚠️ 이 값은 이 실행에서만 유효합니다. 확정되면")
+                print("     hardware/arm_controller.py 에 직접 적어 넣으세요.")
+
+            elif p[0] == "probe" and len(p) in (3, 4):
+                # 관절 하나의 '실제 기계 한계'를 5°씩 올려가며 찾는다.
+                #   probe s3 180 200
+                # 각 단계에서 사람이 눈으로 보고 '더 움직였는지' 판단한다.
+                # 서보에는 위치 센서가 없어 코드로는 알 수 없기 때문이다.
+                jn = p[1]
+                if jn not in ("s1", "s2", "s3"):
+                    print("  관절은 s1/s2/s3"); continue
+                j = int(jn[1]) - 1
+                start = int(p[2])
+                end = int(p[3]) if len(p) == 4 else ac.SERVO_MAX
+                stepd = 5 if end >= start else -5
+
+                saved = list(ac.SERVO_SAFE_MAX), list(ac.SERVO_SAFE_MIN)
+                # 재는 동안만 그 관절의 제한을 펌웨어 한계까지 열어 둔다
+                ac.SERVO_SAFE_MAX[j] = max(ac.SERVO_SAFE_MAX[j], start, end)
+                ac.SERVO_SAFE_MIN[j] = min(ac.SERVO_SAFE_MIN[j], start, end)
+
+                print(f"  {jn} 를 {start}° → {end}° 까지 {abs(stepd)}°씩 움직입니다.")
+                print("  각 단계에서 팔이 '실제로 더 움직였는지' 눈으로 보세요.")
+                print("  🛑 끼익·드르륵 소리가 나면 즉시 x 를 누르세요 (기어 손상 중).")
+                last_ok = None
+                try:
+                    for tgt in range(start, end + stepd, stepd):
+                        cmd = list(arm._cur)
+                        cmd[j] = tgt
+                        arm._ramp_send(cmd[0], cmd[1], cmd[2], holding)
+                        ans = input(f"    {jn}={tgt}° → 더 움직였나요? "
+                                    "[Enter=예, 계속] [x=아니오/소리남 → 여기가 한계] > "
+                                    ).strip().lower()
+                        if ans in ("x", "n", "q"):
+                            break
+                        last_ok = tgt
+                finally:
+                    ac.SERVO_SAFE_MAX[:], ac.SERVO_SAFE_MIN[:] = saved[0], saved[1]
+
+                if last_ok is None:
+                    print(f"  → {start}° 에서 이미 안 움직였습니다. "
+                          "시작값을 더 낮춰서 다시 재보세요.")
+                else:
+                    print(f"  → {jn} 의 실제 한계 = {last_ok}°")
+                    print(f"     되돌립니다: {jn}={last_ok}")
+                    cmd = list(arm._cur); cmd[j] = last_ok
+                    ac.SERVO_SAFE_MAX[j] = max(ac.SERVO_SAFE_MAX[j], last_ok)
+                    arm._ramp_send(cmd[0], cmd[1], cmd[2], holding)
+                    tag = "MAX" if stepd > 0 else "MIN"
+                    print(f"\n     hardware/arm_controller.py 에 적어 넣으세요:")
+                    print(f"       SERVO_SAFE_{tag}[{j}] = {last_ok}   # {jn}")
 
             elif p[0] == "set" and len(p) == 4:
                 # 움직이지 않고 '현재 위치 가정'만 교정 (첫 명령 슬램 방지)
@@ -459,6 +535,7 @@ def main():
                 else:
                     print("  명령: e4 | down | up | pick e2 | place e4 | move e2 e4")
                     print("        check | zoff 8 | suction 1 | set 85 140 180 | home | q")
+                    print("        a 85 140 185 | limit | probe s3 180 200")
 
         except ValueError as e:
             print(f"  [실패] {e}")
