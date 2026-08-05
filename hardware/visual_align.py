@@ -28,6 +28,11 @@ ALIGN_TOL_CELLS = 0.15
 ALIGN_MAX_ITER = 4
 # 보정 이득. 1.0이면 측정 오차만큼 그대로 되돌린다. 진동하면 0.6~0.8로 낮춘다.
 ALIGN_GAIN = 0.8
+# 측정 오차가 이보다 크면 '마커를 잘못 잡은 것'으로 보고 보정하지 않는다.
+# 로봇의 실제 오차는 보통 1칸(29mm) 미만이다. 그보다 훨씬 큰 값이 나오면
+# 흡착컵이 아니라 다른 물체(체스판·테이프·조명 반사)를 마커로 오인한 것이다.
+# 그 값을 믿고 움직이면 팔이 엉뚱한 곳으로 크게 이동해 위험하다.
+ALIGN_MAX_ERR_CELLS = 1.2
 
 
 def colrow_to_xy(col_f: float, row_f: float) -> tuple:
@@ -82,6 +87,16 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
             if verbose:
                 print(f"    [정렬] 허용치({tol*CELL_SIZE*1000:.0f}mm) 안 — 완료")
             return True
+
+        # 측정값이 비현실적으로 크면 오인식 — 움직이지 않고 중단
+        if err > ALIGN_MAX_ERR_CELLS:
+            if verbose:
+                print(f"    [정렬] 오차 {err*CELL_SIZE*1000:.0f}mm 는 너무 큽니다 "
+                      f"(한도 {ALIGN_MAX_ERR_CELLS*CELL_SIZE*1000:.0f}mm)")
+                print("      → 흡착컵이 아닌 다른 물체를 마커로 잡은 것으로 보입니다.")
+                print("      → 보정하지 않고 진행합니다. 'show'로 무엇이 잡히는지"
+                      " 확인하고 마커 색/오프셋을 점검하세요.")
+            return False
 
         # 발산 감지: 오차가 오히려 커지면 중단 (이득이 너무 큼)
         if last_err is not None and err > last_err * 1.2:
