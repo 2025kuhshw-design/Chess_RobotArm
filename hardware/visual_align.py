@@ -40,7 +40,8 @@ def colrow_to_xy(col_f: float, row_f: float) -> tuple:
 
 def align_over_square(arm, detector, col: int, row: int, lift: float,
                       tol=ALIGN_TOL_CELLS, max_iter=ALIGN_MAX_ITER,
-                      gain=ALIGN_GAIN, verbose=True, view_cb=None) -> bool:
+                      gain=ALIGN_GAIN, verbose=True, view_cb=None,
+                      suction: bool = False) -> bool:
     """목표 칸 위에서 카메라를 보며 흡착컵을 정렬한다.
 
     arm      : RealArm
@@ -48,6 +49,8 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
     col,row  : 목표 칸
     lift     : 접근 높이 (m)
     view_cb  : 매 반복마다 호출되는 콜백(화면 갱신용). None이면 생략
+    suction  : 기물을 들고 있는 중이면 True. ⚠️ 빠뜨리면 정렬 도중
+               흡착이 풀려 기물을 떨어뜨린다.
     반환     : True=허용치 안으로 수렴, False=마커 미검출 또는 미수렴
     """
     # 현재 명령 중인 목표 (연속 좌표). 보정하며 이 값을 조금씩 옮긴다.
@@ -92,7 +95,8 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
         tgt_row -= gain * err_row
         x, y = colrow_to_xy(tgt_col, tgt_row)
         try:
-            arm.move(*inverse_kinematics(x, y, PIECE_Z + lift))
+            arm.move(*inverse_kinematics(x, y, PIECE_Z + lift),
+                     suction=suction)
         except ValueError as e:
             if verbose:
                 print(f"    [정렬] 보정 위치가 도달 불가 — 중단 ({e})")

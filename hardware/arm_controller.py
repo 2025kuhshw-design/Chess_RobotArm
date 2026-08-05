@@ -393,13 +393,23 @@ class RealArm:
     def execute_move(self, from_sq: tuple, to_sq: tuple,
                      is_capture: bool = False,
                      rl_correction=None,
-                     confirm: bool = False):
+                     confirm: bool = False,
+                     aligner=None):
         """
         from_sq, to_sq = (col, row)
         rl_correction = (delta_q1, delta_q2, delta_q3) or None
         confirm=True 면 칸 위 안전높이에서 멈춰 사람 확인을 받은 뒤 하강한다.
-            (카메라로 자동 보정하는 것이 아니라, 사람이 눈으로 보고 판단)
+            (사람이 눈으로 보고 판단)
+        aligner=f(col, row, lift, suction) 를 주면 하강 직전마다 호출해
+            카메라 폐루프 보정을 한다. None이면 보정 없이 진행.
         """
+        def _align(col, row, suction=False):
+            if aligner is None:
+                return
+            try:
+                aligner(col, row, _safe_lift(col, row), suction)
+            except Exception as e:
+                print(f"    [정렬] 실패 — 보정 없이 진행 ({e})")
         def _ask(msg):
             if not confirm:
                 return True
@@ -428,6 +438,7 @@ class RealArm:
         if is_capture:
             _move_to(tc, tr, lift=True)
             time.sleep(SETTLE_WAIT)
+            _align(tc, tr)                   # 카메라 보정 후 하강
             _move_to(tc, tr, lift=False)
             time.sleep(SETTLE_WAIT)
             self.move(*inverse_kinematics(*touch_xyz(tc, tr)), suction=True)
@@ -449,6 +460,7 @@ class RealArm:
         # 1) 출발 칸 위 안전 높이
         _move_to(fc, fr, lift=True)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
+        _align(fc, fr)                   # 카메라 보정
         if not _ask("흡착컵이 집을 기물 바로 위인가요?"):
             print("    건너뜀 — 기물을 손으로 옮겨주세요"); self.home(); return
         # 2) 출발 칸 하강
@@ -463,6 +475,7 @@ class RealArm:
         # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
         _move_to(tc, tr, lift=True, suction=True)
         time.sleep(SETTLE_WAIT)
+        _align(tc, tr, suction=True)     # 기물 든 채로 보정 (흡착 유지)
         _ask("이 칸에 놓을까요?")   # 취소해도 어차피 놓아야 하므로 진행
         # 6) 도착 칸 하강 (기물 든 상태 유지)
         _move_to(tc, tr, lift=False, suction=True)

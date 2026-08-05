@@ -223,12 +223,21 @@ def main():
 
     show = show_once
 
-    def align(sq):
-        """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신)."""
+    def align(sq, suction=False):
+        """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신).
+        ⚠️ 기물을 들고 있으면 suction=True — 안 넘기면 정렬 중 떨어뜨린다."""
         if detector is None:
             return
         align_over_square(arm, det_src, sq[0], sq[1], _safe_lift(*sq),
-                          view_cb=show_once)
+                          view_cb=show_once, suction=suction)
+        show_once()
+
+    def aligner_cb(col, row, lift, suction):
+        """execute_move가 하강 직전마다 부르는 콜백."""
+        if detector is None:
+            return
+        align_over_square(arm, det_src, col, row, lift,
+                          view_cb=show_once, suction=suction)
         show_once()
 
     def goto(col, row, lift, suction=False):
@@ -322,7 +331,7 @@ def main():
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
                 time.sleep(ac.SETTLE_WAIT)
-                align(sq)
+                align(sq, suction=holding)   # 든 채로 정렬 (흡착 유지)
                 if not args.no_confirm:
                     ans = input("    이 칸에 놓을까요? [Enter=하강] [x=취소] > ").strip().lower()
                     if ans in ("x", "q", "n"):
@@ -340,7 +349,8 @@ def main():
                 if not a or not b:
                     print("  칸 이름 오류 (예: move e2 e4)"); continue
                 print(f"  {p[1]} → {p[2]} (게임과 동일 시퀀스)")
-                arm.execute_move(a, b, is_capture=False)
+                arm.execute_move(a, b, is_capture=False,
+                                 aligner=aligner_cb if detector else None)
                 cur = b
 
             else:

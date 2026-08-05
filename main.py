@@ -63,6 +63,13 @@ def run_game(args, arm, detector, rl_model):
 
     board = chess.Board()
 
+    # 카메라 폐루프 정렬 콜백 — 하강 직전마다 마커를 보고 위치를 보정
+    aligner = None
+    if detector is not None:
+        from hardware.visual_align import align_over_square
+        def aligner(col, row, lift, suction):
+            align_over_square(arm, detector, col, row, lift, suction=suction)
+
     print("\n" + "="*50)
     print("체스 게임 시작! 당신=WHITE / 로봇=BLACK")
     print("="*50 + "\n")
@@ -144,7 +151,8 @@ def run_game(args, arm, detector, rl_model):
             try:
                 arm.execute_move(from_sq, to_sq, is_capture=capture,
                                  rl_correction=correction,
-                                 confirm=args.confirm)
+                                 confirm=args.confirm,
+                                 aligner=aligner)
             except ValueError as e:
                 print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
                 print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")
