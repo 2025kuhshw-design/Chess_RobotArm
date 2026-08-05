@@ -57,7 +57,11 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
         mk = detector.find_marker()
         if mk is None:
             if verbose:
-                print("    [정렬] 마커를 못 찾음 — 색 범위(MARKER_HSV_RANGES) 확인 필요")
+                print("    [정렬] 마커를 못 찾음 → 보정 없이 진행")
+                print("      · --mode vision 창이 켜져 있으면 닫으세요 "
+                      "(카메라를 두 프로그램이 동시에 못 씁니다)")
+                print("      · 팔이 마커를 가리고 있지 않은지 확인")
+                print("      · 색 범위: vision/detect.py 의 MARKER_HSV_RANGES")
             return False
 
         # 마커가 있는 곳 - 있어야 할 곳 = 오차 (칸 단위)

@@ -57,6 +57,8 @@ MARKER_HSV_RANGES = [
     ((170, 110,  80), (179, 255, 255)),   # 빨강 (H 높은 쪽)
 ]
 MARKER_MIN_AREA = 40      # 이보다 작은 덩어리는 잡음으로 무시 (탑뷰 픽셀)
+WARMUP_FRAMES   = 8       # 카메라 열자마자 버릴 프레임 수 (자동노출 안정화)
+MARKER_RETRY    = 5       # 마커를 못 찾았을 때 새 프레임으로 재시도할 횟수
 
 # 마커가 흡착컵 중심 바로 위에 있지 않을 때의 보정 (칸 단위).
 # 예: 마커가 흡착컵보다 파일 방향으로 +0.3칸 치우쳐 보이면 (0.3, 0.0).
@@ -111,6 +113,10 @@ class ChessBoardDetector:
             raise RuntimeError(f"카메라 {camera_index}를 열 수 없습니다. "
                                "먼저 python vision/calibrate.py 를 실행하세요.")
         self._prev_board = None
+        # 워밍업: 카메라를 막 열면 자동노출·화이트밸런스가 잡히기 전이라
+        # 첫 몇 프레임이 어둡거나 색이 틀어져 마커를 놓친다.
+        for _ in range(WARMUP_FRAMES):
+            self.cap.read()
         print(f"[Detector] 카메라 {camera_index} 초기화 완료")
 
     # ─────────────────────────────────────────
@@ -343,9 +349,20 @@ class ChessBoardDetector:
         필요하다. 이 함수가 그 '보는' 부분이다.
         """
         if frame is None:
-            ret, frame = self.cap.read()
-            if not ret:
-                return None
+            # 한 프레임만 보고 판단하면 노출 변동·모션 블러로 놓칠 수 있다.
+            # 프레임을 새로 받아가며 몇 번 재시도한다.
+            for attempt in range(MARKER_RETRY):
+                ret, f = self.cap.read()
+                if not ret:
+                    continue
+                r = self._find_marker_in(f)
+                if r is not None:
+                    return r
+            return None
+        return self._find_marker_in(frame)
+
+    def _find_marker_in(self, frame):
+        """단일 프레임에서 마커 찾기 (재시도 없음)."""
         top = self._get_top_view(frame)
         hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
 
