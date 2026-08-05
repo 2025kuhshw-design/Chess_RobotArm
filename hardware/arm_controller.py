@@ -88,7 +88,8 @@ def _clamp_safe(s1: int, s2: int, s3: int, warn: bool = True) -> tuple:
 #   - 팔꿈치  q3=0: 전완(아랫팔)이 상완과 일직선(완전히 편 상태)
 # SERVOx_DIR: +1 또는 -1. 서보 각도를 키웠을 때 관절이 IK의 +방향으로 돌면 +1.
 #   (실물에서 반대로 움직이면 부호를 뒤집는다)
-SERVO1_HOME = 38;  SERVO1_DIR = +1   # 베이스 (s1 커질수록 로봇 왼쪽=+y)
+SERVO1_HOME = 90;  SERVO1_DIR = +1   # 베이스 (s1 커질수록 로봇 왼쪽=+y)
+                                     # 2차 교체 서보: 90°가 정면 (이전 서보는 38°)
 SERVO2_HOME = -10; SERVO2_DIR = +1   # 어깨 (수직=80, 작아질수록 앞으로)
 SERVO3_HOME = 50;  SERVO3_DIR = -1   # 팔꿈치 (일직선=50, 커질수록 앞으로)
 
@@ -97,7 +98,7 @@ SERVO3_HOME = 50;  SERVO3_DIR = -1   # 팔꿈치 (일직선=50, 커질수록 앞
 # 실측 확정값 — 이 자세가 팔의 물리적 휴식 자세이기도 하다.
 # ⚠️ 전원을 켜고 프로그램을 시작할 때 팔이 실제로 이 자세에 있어야 안전하다.
 #    (다른 자세에 있으면 첫 명령에서 그 차이만큼 튄다 → start_pose로 알려줄 것)
-PARK_POSE = (38, 140, 180)   # (베이스 정면, 어깨, 팔꿈치) — Z자
+PARK_POSE = (90, 140, 180)   # (베이스 정면, 어깨, 팔꿈치) — Z자
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
