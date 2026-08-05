@@ -51,6 +51,16 @@ def linear_schedule(initial_value: float):
 def mount_drive_if_colab():
     if not IS_COLAB:
         return LOCAL_MODEL_DIR
+
+    # 이미 마운트돼 있으면 그대로 쓴다.
+    # `!python ...` 으로 실행하면 별도 프로세스라 drive.mount()가 노트북
+    # 커널에 접근하지 못해 실패한다("'NoneType' object has no attribute 'kernel'").
+    # 노트북 셀에서 미리 마운트해 두면 이 경로가 이미 존재한다.
+    if os.path.isdir("/content/drive/MyDrive"):
+        os.makedirs(COLAB_DRIVE_DIR, exist_ok=True)
+        print(f"[Colab] 드라이브(이미 마운트됨) 사용: {COLAB_DRIVE_DIR}")
+        return COLAB_DRIVE_DIR
+
     try:
         from google.colab import drive
         drive.mount("/content/drive")
@@ -59,6 +69,10 @@ def mount_drive_if_colab():
         return COLAB_DRIVE_DIR
     except Exception as e:
         print(f"[Colab] 드라이브 마운트 실패: {e} → 로컬 저장")
+        print("  ⚠️ Colab 세션이 끝나면 로컬 파일은 사라집니다.")
+        print("     노트북 셀에서 먼저 아래를 실행한 뒤 다시 학습하거나,")
+        print("       from google.colab import drive; drive.mount('/content/drive')")
+        print("     학습 후 반드시 모델을 드라이브로 복사/다운로드하세요.")
         return LOCAL_MODEL_DIR
 
 
