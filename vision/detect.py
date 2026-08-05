@@ -50,13 +50,23 @@ ROBOT_SIDE = "left"
 # 알아내 오차만큼 다시 움직인다(폐루프 보정).
 #   기계적 유격 탓에 오차가 매번 달라지므로 고정 보정식으로는 한계가 있다.
 # HSV 범위. OpenCV의 H는 0~179.
-# 기본값은 **빨강** — 흡착기 마운트에 감긴 빨간 점퍼선을 그대로 마커로 쓴다.
-# 빨강은 H가 0에서 끊기므로 구간을 둘로 나눠야 한다.
+# 현재 마커: **노랑**
+# ⚠️ 체스판의 밝은 칸(연한 나무색)이 노랑과 색상(H)이 겹친다. 구분 포인트는
+#    **채도(S)** — 나무색은 채도가 낮고(대략 30~90), 형광 노랑은 높다(150+).
+#    그래서 S 최소값을 높게 잡아야 보드를 마커로 오인하지 않는다.
+#    마커를 못 찾으면 S 최소를 낮추되, 보드가 잡히기 시작하면 다시 올릴 것.
 MARKER_HSV_RANGES = [
-    ((  0, 110,  80), ( 10, 255, 255)),   # 빨강 (H 낮은 쪽)
-    ((170, 110,  80), (179, 255, 255)),   # 빨강 (H 높은 쪽)
+    (( 20, 130, 120), ( 38, 255, 255)),   # 노랑 (채도 높은 것만)
 ]
+# 참고 — 다른 색으로 바꿀 때:
+#   빨강 : ((0,110,80),(10,255,255)) 과 ((170,110,80),(179,255,255)) 두 구간
+#   초록 : ((35,80,60),(85,255,255))
+#   파랑 : ((100,120,60),(130,255,255))
+#   분홍 : ((140,90,90),(175,255,255))
 MARKER_MIN_AREA = 40      # 이보다 작은 덩어리는 잡음으로 무시 (탑뷰 픽셀)
+# 한 칸이 50x50=2500px 이므로, 마커가 칸의 절반을 넘으면 보드나 조명 반사를
+# 잘못 잡은 것으로 본다. 이 경우 마커 없음으로 처리해 엉뚱한 보정을 막는다.
+MARKER_MAX_AREA = 1200
 WARMUP_FRAMES   = 8       # 카메라 열자마자 버릴 프레임 수 (자동노출 안정화)
 MARKER_RETRY    = 5       # 마커를 못 찾았을 때 새 프레임으로 재시도할 횟수
 
@@ -113,6 +123,7 @@ class ChessBoardDetector:
             raise RuntimeError(f"카메라 {camera_index}를 열 수 없습니다. "
                                "먼저 python vision/calibrate.py 를 실행하세요.")
         self._prev_board = None
+        self._last_marker_area = 0
         # 워밍업: 카메라를 막 열면 자동노출·화이트밸런스가 잡히기 전이라
         # 첫 몇 프레임이 어둡거나 색이 틀어져 마커를 놓친다.
         for _ in range(WARMUP_FRAMES):
@@ -376,7 +387,14 @@ class ChessBoardDetector:
         cnts = [c for c in cnts if cv2.contourArea(c) >= MARKER_MIN_AREA]
         if not cnts:
             return None
-        M = cv2.moments(max(cnts, key=cv2.contourArea))
+        best = max(cnts, key=cv2.contourArea)
+        area = cv2.contourArea(best)
+        if area > MARKER_MAX_AREA:
+            # 체스판 밝은 칸이나 조명 반사를 잡은 것 — 채도(S) 최소값을 올릴 것
+            self._last_marker_area = area
+            return None
+        self._last_marker_area = area
+        M = cv2.moments(best)
         if M["m00"] == 0:
             return None
         px, py = M["m10"] / M["m00"], M["m01"] / M["m00"]

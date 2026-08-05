@@ -240,11 +240,21 @@ def main():
                         print("  --camera 옵션으로 실행해야 합니다"); continue
                     mk = detector.find_marker()
                     if mk is None:
-                        print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인 "
-                              "(--mode vision 으로 색 튜닝)")
+                        import vision.detect as vd
+                        a = detector._last_marker_area
+                        print("  마커를 못 찾음")
+                        if a > vd.MARKER_MAX_AREA:
+                            print(f"    → 너무 큰 덩어리({a:.0f}px)를 잡음. 체스판이나 반사를"
+                                  f" 마커로 오인한 것입니다.")
+                            print(f"       MARKER_HSV_RANGES의 채도(S) 최소값을 올리세요.")
+                        else:
+                            print("    → --mode vision 창이 닫혀 있는지, 색 범위가 맞는지 확인")
                     else:
+                        import vision.detect as vd
                         print(f"  마커 위치: 파일 {mk[0]:+.2f}, 랭크 {mk[1]:+.2f} "
                               f"(가장 가까운 칸 {chr(97+int(round(mk[0])))}{int(round(mk[1]))+1})")
+                        print(f"  검출 크기: {detector._last_marker_area:.0f}px "
+                              f"(정상 범위 {vd.MARKER_MIN_AREA}~{vd.MARKER_MAX_AREA})")
                 elif p[0] == "check":
                     # 현재 캘리브레이션·보정 기준으로 어느 칸에 닿는지 지도 출력
                     print("  도달 지도 (O=닿음, .=서보범위 밖)   랭크8=로봇쪽")
