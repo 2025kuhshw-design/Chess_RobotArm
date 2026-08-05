@@ -17,6 +17,12 @@ INIT_WAIT_SEC    = 2.0         # 아두이노 초기화 대기
 CMD_TIMEOUT_SEC  = 3.0         # OK 응답 타임아웃
 SUCTION_ON_WAIT  = 0.5         # 흡착 후 대기 (초)
 SUCTION_OFF_WAIT = 0.3         # 해제 후 대기 (초)
+
+# 정밀 동작(하강·흡착) 직전에 팔의 잔류 진동이 잦아들기를 기다리는 시간 (초).
+# 팔 구조물의 고유진동수가 약 3~4Hz로 측정돼, 이동을 멈춰도 몇 번 더 흔들린다.
+# 흔들리는 상태에서 하강하면 흡착컵이 기물 중심을 벗어난다.
+# 0.4초면 3.5Hz 진동이 1~2주기 감쇠한다. 흔들림이 심하면 늘릴 것.
+SETTLE_WAIT      = 0.4
 EXPECTED_FW      = "3"         # servo_control.ino 의 FW_VERSION 과 일치해야 함
 
 # 기물을 집으러 하강할 때, 기물 윗면(PIECE_Z)보다 얼마나 더 내려갈지 (m).
@@ -413,7 +419,9 @@ class RealArm:
         # 기물 잡기: 도착 칸 기물 먼저 제거
         if is_capture:
             _move_to(tc, tr, lift=True)
+            time.sleep(SETTLE_WAIT)
             _move_to(tc, tr, lift=False)
+            time.sleep(SETTLE_WAIT)
             self.move(*inverse_kinematics(*touch_xyz(tc, tr)), suction=True)
             time.sleep(SUCTION_ON_WAIT)
             _move_to(tc, tr, lift=True, suction=True)     # 든 채로 상승
@@ -432,8 +440,10 @@ class RealArm:
 
         # 1) 출발 칸 위 안전 높이
         _move_to(fc, fr, lift=True)
+        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
         # 2) 출발 칸 하강
         _move_to(fc, fr, lift=False)
+        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 흡착
         # 3) 흡착기 ON
         q1, q2, q3 = inverse_kinematics(*touch_xyz(fc, fr))
         self.move(q1, q2, q3, suction=True)
@@ -444,6 +454,7 @@ class RealArm:
         _move_to(tc, tr, lift=True, suction=True)
         # 6) 도착 칸 하강 (기물 든 상태 유지)
         _move_to(tc, tr, lift=False, suction=True)
+        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 놓기
         # 7) 흡착기 OFF — 여기서 처음으로 놓는다
         q1, q2, q3 = inverse_kinematics(*touch_xyz(tc, tr))
         self.move(q1, q2, q3, suction=False)

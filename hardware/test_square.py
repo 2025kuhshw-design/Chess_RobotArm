@@ -126,7 +126,9 @@ def main():
                 cur = sq
                 print(f"  {p[1]} 집기 (이후 흡착 유지 — place로 놓을 때까지)")
                 goto(*sq, lift=True)
+                time.sleep(ac.SETTLE_WAIT)
                 goto(*sq, lift=False)
+                time.sleep(ac.SETTLE_WAIT)   # 흔들림 가라앉힌 뒤 흡착
                 arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=True)
                 time.sleep(0.6)
                 goto(*sq, lift=True, suction=True)   # 든 채로 상승
@@ -139,7 +141,9 @@ def main():
                 cur = sq
                 print(f"  {p[1]}에 놓기")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
+                time.sleep(ac.SETTLE_WAIT)
                 goto(*sq, lift=False, suction=holding)   # 든 채로 하강
+                time.sleep(ac.SETTLE_WAIT)   # 흔들림 가라앉힌 뒤 놓기
                 arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=False)
                 time.sleep(0.4)
                 holding = False
