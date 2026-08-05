@@ -137,7 +137,8 @@ def run_game(args, arm, detector, rl_model):
             # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
             try:
                 arm.execute_move(from_sq, to_sq, is_capture=capture,
-                                 rl_correction=correction)
+                                 rl_correction=correction,
+                                 confirm=args.confirm)
             except ValueError as e:
                 print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
                 print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")
@@ -177,6 +178,9 @@ def main():
                         help="스텝 간 대기(s). 클수록 느리고 안전")
     parser.add_argument("--no-startup", action="store_true",
                         help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
+    parser.add_argument("--confirm", action="store_true",
+                        help="집기/놓기 전에 칸 위에서 멈춰 사람 확인을 받는다 "
+                             "(첫 실전 권장. 카메라 자동보정이 아니라 육안 확인)")
     args = parser.parse_args()
 
     print(f"\n[main] 실행 모드: {args.mode}")

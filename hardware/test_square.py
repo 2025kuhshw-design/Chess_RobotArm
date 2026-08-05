@@ -31,6 +31,7 @@ import hardware.arm_controller as ac
 from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
 from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
 import utils.ik_solver as iks
+from hardware.visual_align import align_over_square
 
 
 def ac_fit_active() -> bool:
@@ -61,6 +62,9 @@ def main():
                     help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
     ap.add_argument("--no-confirm", action="store_true",
                     help="pick/place에서 칸 위 확인 단계를 생략하고 바로 하강")
+    ap.add_argument("--camera", type=int, default=None,
+                    help="카메라 번호를 주면 하강 전 카메라로 위치를 보고 "
+                         "오차만큼 다시 움직여 정렬한다(폐루프 보정)")
     args = ap.parse_args()
 
     # auto_home=False: 시작하자마자 팔을 움직이지 않는다.
@@ -76,8 +80,24 @@ def main():
             arm.close()
             print("[test_square] 기동 중단."); return
 
+    # 카메라 폐루프 보정 (선택)
+    detector = None
+    if args.camera is not None and not args.sim:
+        try:
+            from vision.detect import ChessBoardDetector
+            detector = ChessBoardDetector(camera_index=args.camera)
+            print("  [카메라] 폐루프 보정 활성 — 하강 전 마커를 보고 정렬합니다")
+        except Exception as e:
+            print(f"  [카메라] 초기화 실패: {e} → 보정 없이 진행")
+
     cur = None       # 현재 대상 칸 (col,row)
     holding = False  # 기물을 흡착해 들고 있는 중인가
+
+    def align(sq):
+        """카메라가 있으면 하강 전에 정렬."""
+        if detector is None:
+            return
+        align_over_square(arm, detector, sq[0], sq[1], _safe_lift(*sq))
 
     def goto(col, row, lift, suction=False):
         """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는
@@ -135,6 +155,7 @@ def main():
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True)
                 time.sleep(ac.SETTLE_WAIT)
+                align(sq)
                 if not args.no_confirm:
                     # 칸 위에 멈춰서 흡착컵이 기물 바로 위에 있는지 눈/카메라로 확인
                     ans = input("    흡착컵이 기물 바로 위인가요? "
@@ -166,6 +187,7 @@ def main():
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
                 time.sleep(ac.SETTLE_WAIT)
+                align(sq)
                 if not args.no_confirm:
                     ans = input("    이 칸에 놓을까요? [Enter=하강] [x=취소] > ").strip().lower()
                     if ans in ("x", "q", "n"):
@@ -236,6 +258,8 @@ def main():
         except KeyboardInterrupt:
             print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
+    if detector is not None:
+        detector.close()
     arm.close()
     print("[test_square] 종료 (팔은 현재 위치 유지)")
 

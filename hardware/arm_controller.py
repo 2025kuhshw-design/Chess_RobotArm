@@ -392,11 +392,19 @@ class RealArm:
     # ─────────────────────────────────────────
     def execute_move(self, from_sq: tuple, to_sq: tuple,
                      is_capture: bool = False,
-                     rl_correction=None):
+                     rl_correction=None,
+                     confirm: bool = False):
         """
         from_sq, to_sq = (col, row)
         rl_correction = (delta_q1, delta_q2, delta_q3) or None
+        confirm=True 면 칸 위 안전높이에서 멈춰 사람 확인을 받은 뒤 하강한다.
+            (카메라로 자동 보정하는 것이 아니라, 사람이 눈으로 보고 판단)
         """
+        def _ask(msg):
+            if not confirm:
+                return True
+            ans = input(f"    {msg} [Enter=진행] [x=이 수 건너뛰기] > ").strip().lower()
+            return ans not in ("x", "q", "n")
         # ⚠️ suction 인자를 반드시 넘길 것. 기본값(False)으로 두면 기물을
         #    든 채 이동하는 구간에서 흡착이 풀려 기물을 떨어뜨린다.
         def _move_to(col, row, lift=False, suction=False):
@@ -441,6 +449,8 @@ class RealArm:
         # 1) 출발 칸 위 안전 높이
         _move_to(fc, fr, lift=True)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
+        if not _ask("흡착컵이 집을 기물 바로 위인가요?"):
+            print("    건너뜀 — 기물을 손으로 옮겨주세요"); self.home(); return
         # 2) 출발 칸 하강
         _move_to(fc, fr, lift=False)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 흡착
@@ -452,6 +462,8 @@ class RealArm:
         _move_to(fc, fr, lift=True, suction=True)
         # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
         _move_to(tc, tr, lift=True, suction=True)
+        time.sleep(SETTLE_WAIT)
+        _ask("이 칸에 놓을까요?")   # 취소해도 어차피 놓아야 하므로 진행
         # 6) 도착 칸 하강 (기물 든 상태 유지)
         _move_to(tc, tr, lift=False, suction=True)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 놓기

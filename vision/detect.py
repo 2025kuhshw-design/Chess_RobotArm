@@ -42,6 +42,20 @@ ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
 # (사람은 로봇 맞은편에 앉는다고 가정 — 랭크1이 사람 쪽, 랭크8이 로봇 쪽)
 ROBOT_SIDE = "left"
 
+# ─────────────────────────────────────────
+# 흡착컵 마커 (시각 피드백 보정용)
+# ─────────────────────────────────────────
+# 흡착컵 옆(카메라에서 보이는 면)에 눈에 띄는 색 스티커를 붙이고, 그 색을
+# 여기에 등록한다. 카메라가 이 마커를 보고 "지금 실제로 어디에 가 있는지"를
+# 알아내 오차만큼 다시 움직인다(폐루프 보정).
+#   기계적 유격 탓에 오차가 매번 달라지므로 고정 보정식으로는 한계가 있다.
+# HSV 범위. OpenCV의 H는 0~179. 기본값은 형광 분홍/마젠타 계열.
+#   빨강처럼 H가 0에서 끊기는 색은 구간을 둘로 나눠 넣는다.
+MARKER_HSV_RANGES = [
+    ((140,  90,  90), (175, 255, 255)),   # 분홍~마젠타
+]
+MARKER_MIN_AREA = 40      # 이보다 작은 덩어리는 잡음으로 무시 (탑뷰 픽셀)
+
 
 def chess_to_grid(col: int, row: int) -> tuple:
     """체스 좌표(col=파일 0~7, row=랭크 0~7) → 탑뷰 격자 인덱스 (gx, gy).
@@ -58,6 +72,25 @@ def chess_to_grid(col: int, row: int) -> tuple:
     if ROBOT_SIDE == "bottom":
         # 로봇 아래 → 랭크는 아래로, 파일은 왼쪽으로
         return (7 - col, row)
+    raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
+
+
+def grid_uv_to_colrow(u: float, v: float) -> tuple:
+    """탑뷰의 연속 격자 좌표 (u, v) → 연속 체스 좌표 (col, row).
+
+    u,v 는 칸 단위(0~8). 격자 칸 (gx,gy)의 중심이 (gx+0.5, gy+0.5).
+    chess_to_grid의 역변환을 실수 영역으로 확장한 것 — 흡착컵이 칸 중심에서
+    얼마나 벗어났는지를 칸 단위로 재는 데 쓴다.
+    """
+    gx, gy = u - 0.5, v - 0.5
+    if ROBOT_SIDE == "left":
+        return (7 - gy, 7 - gx)
+    if ROBOT_SIDE == "right":
+        return (gy, gx)
+    if ROBOT_SIDE == "top":
+        return (gx, 7 - gy)
+    if ROBOT_SIDE == "bottom":
+        return (7 - gx, gy)
     raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
 
 
@@ -265,6 +298,19 @@ class ChessBoardDetector:
                     cv2.putText(top, f"{col},{row}", (x1+3, y1+CELL_SIZE_PX-5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200,200,200), 1)
 
+            # 흡착컵 마커 표시 (색 범위 튜닝용)
+            mk = self.find_marker(frame)
+            if mk is not None:
+                gx, gy = chess_to_grid(int(round(mk[0])), int(round(mk[1])))
+                # 연속 좌표를 다시 픽셀로 — 표시용이므로 근사로 충분
+                cv2.putText(top, f"MARK {chr(97+int(round(mk[0])))}{int(round(mk[1]))+1}",
+                            (5, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.circle(top, (gx*CELL_SIZE_PX + CELL_SIZE_PX//2,
+                                 gy*CELL_SIZE_PX + CELL_SIZE_PX//2), 8, (0, 0, 255), 2)
+            else:
+                cv2.putText(top, "MARK: not found", (5, 34),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
             # 축 방향 안내 — 로봇이 있는 변을 표시
             side_txt = {"bottom": "ROBOT THIS SIDE (v)", "top": "ROBOT THIS SIDE (^)",
                         "left": "ROBOT <", "right": "> ROBOT"}[ROBOT_SIDE]
@@ -274,6 +320,42 @@ class ChessBoardDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, ORIGIN_COLOR, 2)
 
         return top
+
+    # ─────────────────────────────────────────
+    # 메서드 4: 흡착컵 마커 위치 (시각 피드백 보정용)
+    # ─────────────────────────────────────────
+    def find_marker(self, frame=None) -> tuple:
+        """흡착컵에 붙인 색 마커의 위치를 찾아 연속 체스 좌표 (col, row)로 반환.
+
+        못 찾으면 None. 마커가 없으면 색 범위(MARKER_HSV_LO/HI)를 조정하거나
+        --mode vision 디버그 뷰에서 마커가 잡히는지 먼저 확인할 것.
+
+        기계적 유격 때문에 로봇의 오차는 매번 달라진다. 그래서 고정된 보정식
+        대신, 실제로 어디에 가 있는지 카메라로 보고 그만큼 움직이는 방식이
+        필요하다. 이 함수가 그 '보는' 부분이다.
+        """
+        if frame is None:
+            ret, frame = self.cap.read()
+            if not ret:
+                return None
+        top = self._get_top_view(frame)
+        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+
+        mask = None
+        for lo, hi in MARKER_HSV_RANGES:
+            m = cv2.inRange(hsv, np.array(lo), np.array(hi))
+            mask = m if mask is None else cv2.bitwise_or(mask, m)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = [c for c in cnts if cv2.contourArea(c) >= MARKER_MIN_AREA]
+        if not cnts:
+            return None
+        M = cv2.moments(max(cnts, key=cv2.contourArea))
+        if M["m00"] == 0:
+            return None
+        px, py = M["m10"] / M["m00"], M["m01"] / M["m00"]
+        return grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
 
     def close(self):
         if self.cap is not None:
