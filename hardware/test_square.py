@@ -251,7 +251,7 @@ def main():
               f"(서보 {arm._rad_to_servo(*q)}){'  [흡착 유지]' if suction else ''}")
 
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
-          "set 90 140 180 | home | q")
+          "set 85 140 180 | home | q")
     print("  진단: a 110 140 180 ← 서보 각도로 직접 이동 (한 축만 바꿔서 시험)")
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
@@ -458,7 +458,7 @@ def main():
                           f"— 위치 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]} 유지")
                 else:
                     print("  명령: e4 | down | up | pick e2 | place e4 | move e2 e4")
-                    print("        check | zoff 8 | suction 1 | set 90 140 180 | home | q")
+                    print("        check | zoff 8 | suction 1 | set 85 140 180 | home | q")
 
         except ValueError as e:
             print(f"  [실패] {e}")

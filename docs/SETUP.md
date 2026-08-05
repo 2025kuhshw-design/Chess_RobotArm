@@ -339,7 +339,7 @@ python hardware/test_square.py --port COM5 --step 1 --step-delay 0.1
 | `move e7 e5` | 게임과 **동일한 전체 시퀀스** |
 | `suction 1` / `0` | 흡착만 토글 (**팔은 안 움직임**) |
 | `zoff 8` | 하강 깊이를 8mm로 조정 (아래 참고) |
-| `set 90 140 180` | 현재 위치 가정만 교정 (전송 안 함) |
+| `set 85 140 180` | 현재 위치 가정만 교정 (전송 안 함) |
 | `home` | PARK 자세로 복귀 |
 | `q` | 종료 (팔은 현재 위치 유지) |
 
@@ -542,10 +542,10 @@ python main.py --mode vision --camera 0
 
 **④ 현재 확정값** (이 팔 기준, 실측 완료)
 ```python
-SERVO1_HOME = 90;  SERVO1_DIR = +1   # 정면일 때 90 (2차 교체 서보)
+SERVO1_HOME = 85;  SERVO1_DIR = +1   # 정면일 때 85 (2차 교체 서보, 실측)
 SERVO2_HOME = -10; SERVO2_DIR = +1   # 수직 80 → 80-90 = -10
 SERVO3_HOME = 50;  SERVO3_DIR = -1   # 일직선일 때 50
-PARK_POSE   = (90, 140, 180)         # Z자
+PARK_POSE   = (85, 140, 180)         # Z자
 ```
 `utils/ik_solver.py` 쪽:
 ```python
