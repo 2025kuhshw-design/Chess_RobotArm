@@ -56,6 +56,32 @@ def load_rl_model():
 # ─────────────────────────────────────────
 # 게임 루프
 # ─────────────────────────────────────────
+def _startup_vision_check(detector):
+    """시작 배치를 제대로 읽는지 게임 시작 전에 확인한다.
+
+    기물 인식이나 판 방향이 틀렸다면 여기서 드러난다. 게임 도중에
+    "이동 감지 실패"만 반복되는 것보다 훨씬 빨리 알 수 있다.
+    """
+    import vision.detect as vd
+    from vision.detect import format_state
+
+    expect = [["empty"] * 8 for _ in range(8)]
+    for c in range(8):
+        expect[0][c] = expect[1][c] = "white"
+        expect[6][c] = expect[7][c] = "black"
+
+    obs = detector.get_board_state(expect=expect)
+    n = sum(obs[r][c] == expect[r][c] for r in range(8) for c in range(8))
+    print(f"[카메라] 시작 배치 판독: 64칸 중 {n}칸 일치 "
+          f"(ROBOT_SIDE=\"{vd.ROBOT_SIDE}\", 임계 {vd.OCC_DIFF_THRESH})")
+    if n >= 60:
+        return
+    print("  ⚠️ 판독이 시작 배치와 많이 다릅니다. 지금 판이 시작 배치가 아니면")
+    print("     무시해도 됩니다. 시작 배치가 맞다면 아래를 확인하세요:")
+    print(format_state(obs, expect))
+    print("     python vision/check_board.py --camera <번호> --all-sides")
+
+
 def read_human_move(detector, board):
     """카메라로 사람이 둔 수를 읽는다. 실패하면 직접 입력받는다.
 
@@ -78,6 +104,9 @@ def read_human_move(detector, board):
         if obs is not None:
             print("  카메라가 본 배치 (대문자=현재 기보와 다른 칸):")
             print(format_state(obs, board_to_state(board)))
+        if ans == "s":
+            # 임계값을 조정할 수 있게 숫자까지 보여준다
+            print(detector.explain_board_state())
 
     if move is not None:
         gap = score - cands[1][0] if len(cands) > 1 else score
@@ -231,7 +260,8 @@ def main():
                         choices=["sim", "real", "vision", "chess"])
     parser.add_argument("--port",      type=str, default=DEFAULT_PORT)
     parser.add_argument("--stockfish", type=str, default=DEFAULT_STOCKFISH)
-    parser.add_argument("--camera",   type=int, default=0)
+    parser.add_argument("--camera", type=int, default=0,
+                        help="카메라 번호 (이 PC는 보통 1)")
     parser.add_argument("--start", type=int, nargs=3, metavar=("S1","S2","S3"),
                         help="시작 시 팔의 실제 서보 각도 "
                              "(생략하면 PARK_POSE에 있다고 가정)")
@@ -308,8 +338,7 @@ def main():
         try:
             from vision.detect import ChessBoardDetector
             detector = ChessBoardDetector(CALIB_PATH, args.camera)
-            detector.get_board_state()
-            print(f"[카메라] 체스판 인식 완료")
+            _startup_vision_check(detector)
             if args.view:
                 # 라이브 뷰가 카메라 읽기를 독점하므로, 인식은 프록시를 통해
                 # 그 최신 프레임을 빌려 쓴다 (프레임 뺏김 방지).

@@ -17,10 +17,13 @@ TOP_SIZE     = 400        # 탑뷰 이미지 크기 (px)
 CELL_SIZE_PX = TOP_SIZE // 8   # 한 셀 크기 (px)
 
 # 기물 분류 임계값
-WHITE_THRESH = 160     # 이 이상이면 흰 기물
-BLACK_THRESH = 80      # 이 이하면 검은 기물
-# 기물이 있는지 판단: 셀 중앙 영역의 분산이 이 이상이면 기물 있음
-PIECE_VAR_THRESH = 200
+# 빈 칸일 때의 밝기와 이만큼(0~255) 넘게 차이 나면 기물이 있다고 본다.
+# ⚠️ 예전에는 '셀 중앙의 분산'으로 판단했는데, 기물이 셀을 덮으면 오히려
+#    균일해져 분산이 0에 가까워진다. 그래서 32개 기물이 전부 빈 칸으로
+#    읽혔다. 지금은 '빈 칸 대비 얼마나 밝은가/어두운가'로 판단한다.
+# 낮추면 기물을 더 잘 잡지만 그림자·얼룩도 기물로 오인한다.
+# 'python vision/check_board.py' 로 실제 차이값을 보고 정할 것.
+OCC_DIFF_THRESH = 18
 
 # 디버그 오버레이 색상 (BGR)
 LABEL_COLOR  = (0, 215, 255)    # 칸 좌표 라벨: 노랑
@@ -136,6 +139,19 @@ def chess_to_grid(col: int, row: int) -> tuple:
     raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
 
 
+def chess_to_grid_inv(gx: int, gy: int) -> tuple:
+    """chess_to_grid 의 역변환 — 화면 격자 (gx,gy) → 체스 좌표 (col,row)."""
+    if ROBOT_SIDE == "left":
+        return (7 - gy, 7 - gx)
+    if ROBOT_SIDE == "right":
+        return (gy, gx)
+    if ROBOT_SIDE == "top":
+        return (gx, 7 - gy)
+    if ROBOT_SIDE == "bottom":
+        return (7 - gx, gy)
+    raise ValueError(f"ROBOT_SIDE 값이 잘못됨: {ROBOT_SIDE}")
+
+
 def grid_uv_to_colrow(u: float, v: float) -> tuple:
     """탑뷰의 연속 격자 좌표 (u, v) → 연속 체스 좌표 (col, row).
 
@@ -199,70 +215,115 @@ class ChessBoardDetector:
         return cv2.warpPerspective(frame, self._M, (TOP_SIZE, TOP_SIZE))
 
     # ─────────────────────────────────────────
-    # 셀 분류
+    # 셀 밝기 측정
     # ─────────────────────────────────────────
-    def _classify_cell(self, cell_img: np.ndarray, is_white_square: bool) -> str:
-        """
-        셀 중앙 60%를 분석해 기물 유무 및 색상 판단.
-        체커보드 패턴 기반 적응적 임계값 적용.
-        """
+    @staticmethod
+    def _cell_mean(cell_img: np.ndarray) -> float:
+        """셀 중앙 60%의 평균 밝기."""
         h, w = cell_img.shape[:2]
-        margin = int(h * 0.2)
-        center = cell_img[margin:h-margin, margin:w-margin]
+        m = int(h * 0.2)
+        gray = cv2.cvtColor(cell_img[m:h-m, m:w-m], cv2.COLOR_BGR2GRAY)
+        return float(np.mean(gray))
 
-        gray = cv2.cvtColor(center, cv2.COLOR_BGR2GRAY)
-        mean_val = float(np.mean(gray))
-        var_val  = float(np.var(gray))
+    def _cell_means(self, top: np.ndarray) -> np.ndarray:
+        """탑뷰 → 8×8 평균 밝기 배열. 인덱스는 [gy][gx] (화면 격자)."""
+        out = np.zeros((8, 8), dtype=np.float32)
+        for gy in range(8):
+            for gx in range(8):
+                cell = top[gy*CELL_SIZE_PX:(gy+1)*CELL_SIZE_PX,
+                           gx*CELL_SIZE_PX:(gx+1)*CELL_SIZE_PX]
+                out[gy, gx] = self._cell_mean(cell)
+        return out
 
-        # 분산이 낮으면 빈 칸 (균일한 색)
-        if var_val < PIECE_VAR_THRESH:
+    def _empty_levels(self, means: np.ndarray, expect=None) -> tuple:
+        """빈 칸의 기준 밝기를 (밝은칸, 어두운칸) 두 값으로 추정한다.
+
+        ⚠️ 예전에는 '셀 중앙의 분산이 낮으면 빈 칸'으로 판정했다. 이는 틀렸다.
+           기물이 셀 중앙을 덮으면 그 부분은 오히려 **균일**해져 분산이 0에
+           가까워진다. 그래서 32개 기물이 전부 empty 로 읽혔다.
+           지금은 '빈 칸일 때의 밝기'와 얼마나 다른가로 판단한다.
+
+        expect: 지금 있어야 할 배치(8×8). 주면 그중 **빈 칸**들만 표본으로
+                써서 기준을 잡는다 — 조명이 바뀌어도 따라간다.
+                없으면 전체 칸의 중앙값을 쓴다(기물이 많으면 부정확).
+        """
+        light, dark = [], []
+        for gy in range(8):
+            for gx in range(8):
+                if expect is not None:
+                    col, row = chess_to_grid_inv(gx, gy)
+                    if expect[row][col] != "empty":
+                        continue
+                (light if (gx + gy) % 2 == 0 else dark).append(float(means[gy, gx]))
+        # 표본이 너무 적으면 전체로 후퇴
+        if len(light) < 4 or len(dark) < 4:
+            light = [float(means[gy, gx]) for gy in range(8) for gx in range(8)
+                     if (gx + gy) % 2 == 0]
+            dark = [float(means[gy, gx]) for gy in range(8) for gx in range(8)
+                    if (gx + gy) % 2 == 1]
+        return float(np.median(light)), float(np.median(dark))
+
+    def _classify(self, mean_val: float, ref: float) -> str:
+        """빈 칸 기준 밝기와 비교해 판정.
+        밝으면 흰 기물, 어두우면 검은 기물, 비슷하면 빈 칸."""
+        d = mean_val - ref
+        if abs(d) < OCC_DIFF_THRESH:
             return "empty"
-
-        # 밝기로 흰/검 분류
-        if mean_val >= WHITE_THRESH:
-            return "white"
-        elif mean_val <= BLACK_THRESH:
-            return "black"
-        else:
-            # 중간값: 배경 색상 보정 (체커보드 기반)
-            ref = 128 if is_white_square else 50
-            return "white" if mean_val > ref else "black"
+        return "white" if d > 0 else "black"
 
     # ─────────────────────────────────────────
     # 메서드 1: 현재 보드 상태 반환
     # ─────────────────────────────────────────
-    def get_board_state(self, frame=None) -> list:
+    def get_board_state(self, frame=None, expect=None) -> list:
         """
         현재 프레임 캡처 → 8×8 보드 상태 반환.
         board[row][col] ∈ {"empty", "white", "black"}
         ⚠️ 인덱스는 **체스/로봇 좌표**다 (col=파일 a~h, row=랭크 1~8).
            화면 격자 위치는 chess_to_grid()로 변환해 읽는다.
 
-        frame 을 주면 그 프레임으로 읽는다(라이브 뷰가 카메라를 점유 중일 때).
+        frame  을 주면 그 프레임으로 읽는다(라이브 뷰가 카메라를 점유 중일 때).
+        expect 를 주면 그중 빈 칸들로 '빈 칸 기준 밝기'를 잡는다(조명 변화에 강함).
         """
         if frame is None:
             ret, frame = self.cap.read()
             if not ret:
                 raise RuntimeError("카메라 프레임 읽기 실패")
 
-        top   = self._get_top_view(frame)
-        board = []
+        means = self._cell_means(self._get_top_view(frame))
+        lv, dv = self._empty_levels(means, expect)
+        self._last_means, self._last_levels = means, (lv, dv)
 
+        board = []
         for row in range(8):
             board_row = []
             for col in range(8):
                 gx, gy = chess_to_grid(col, row)
-                x1 = gx * CELL_SIZE_PX
-                y1 = gy * CELL_SIZE_PX
-                cell_img = top[y1:y1 + CELL_SIZE_PX, x1:x1 + CELL_SIZE_PX]
-                is_white_sq = (gx + gy) % 2 == 0
-                state = self._classify_cell(cell_img, is_white_sq)
-                board_row.append(state)
+                ref = lv if (gx + gy) % 2 == 0 else dv
+                board_row.append(self._classify(float(means[gy, gx]), ref))
             board.append(board_row)
-
         return board
 
-    def get_stable_board_state(self, tries: int = 6, frame_src=None):
+    def explain_board_state(self, expect=None) -> str:
+        """마지막 판독의 숫자를 표로 보여준다 — 임계값을 조정할 때 쓴다."""
+        if getattr(self, "_last_means", None) is None:
+            return "  (아직 판독한 적이 없습니다)"
+        lv, dv = self._last_levels
+        lines = [f"  빈 칸 기준 밝기: 밝은칸 {lv:.0f} / 어두운칸 {dv:.0f}",
+                 f"  판정 임계 OCC_DIFF_THRESH = {OCC_DIFF_THRESH}",
+                 "  칸별 (밝기, 기준과의 차이):"]
+        for row in range(7, -1, -1):
+            cells = []
+            for col in range(8):
+                gx, gy = chess_to_grid(col, row)
+                ref = lv if (gx + gy) % 2 == 0 else dv
+                d = float(self._last_means[gy, gx]) - ref
+                cells.append(f"{d:+5.0f}")
+            lines.append(f"   {row+1} " + " ".join(cells))
+        lines.append("     " + "     ".join("abcdefgh"))
+        lines.append("  |차이| 가 임계보다 크면 기물 있음 (+흰, -검)")
+        return "\n".join(lines)
+
+    def get_stable_board_state(self, tries: int = 6, frame_src=None, expect=None):
         """연속 두 번 같게 읽힐 때만 결과를 돌려준다.
 
         팔·손이 지나가거나 조명이 흔들리는 순간에 읽으면 엉뚱한 배열이 나온다.
@@ -273,7 +334,7 @@ class ChessBoardDetector:
         """
         prev = None
         for _ in range(tries):
-            cur = self.get_board_state(frame_src() if frame_src else None)
+            cur = self.get_board_state(frame_src() if frame_src else None, expect)
             if prev is not None and cur == prev:
                 return cur
             prev = cur
@@ -299,7 +360,8 @@ class ChessBoardDetector:
         """
         import chess
 
-        observed = self.get_stable_board_state(frame_src=frame_src)
+        expect = board_to_state(board)
+        observed = self.get_stable_board_state(frame_src=frame_src, expect=expect)
         if observed is None:
             return None, 0.0, []
 

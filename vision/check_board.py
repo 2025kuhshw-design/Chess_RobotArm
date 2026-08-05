@@ -1,0 +1,96 @@
+"""
+기물 인식 점검 — 카메라가 판을 어떻게 읽고 있는지 숫자로 확인한다.
+
+두 가지를 한 번에 본다:
+  1. 기물이 제대로 잡히는가 (OCC_DIFF_THRESH 가 맞는가)
+  2. 판 방향이 맞는가 (ROBOT_SIDE 가 맞는가)
+
+시작 배치(기물을 처음 놓은 상태)로 두고 실행하면, 맞을 때 이렇게 나온다:
+    랭크 1·2 = 흰 기물, 랭크 7·8 = 검은 기물, 나머지 = 빈 칸
+
+실행:
+  python vision/check_board.py --camera 1
+  python vision/check_board.py --camera 1 --thresh 12    # 임계값 바꿔 시험
+  python vision/check_board.py --camera 1 --all-sides    # 네 방향 모두 비교
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import vision.detect as vd
+from vision.detect import ChessBoardDetector, format_state
+
+
+def start_position_state():
+    """체스 시작 배치를 8×8 배열로."""
+    st = [["empty"] * 8 for _ in range(8)]
+    for col in range(8):
+        st[0][col] = st[1][col] = "white"    # 랭크 1,2
+        st[6][col] = st[7][col] = "black"    # 랭크 7,8
+    return st
+
+
+def agreement(a, b) -> int:
+    return sum(a[r][c] == b[r][c] for r in range(8) for c in range(8))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--camera", type=int, default=1)
+    ap.add_argument("--thresh", type=float, default=None,
+                    help="OCC_DIFF_THRESH 를 이 값으로 바꿔 시험")
+    ap.add_argument("--all-sides", action="store_true",
+                    help="ROBOT_SIDE 네 가지를 모두 시험해 가장 맞는 것을 찾는다")
+    args = ap.parse_args()
+
+    if args.thresh is not None:
+        vd.OCC_DIFF_THRESH = args.thresh
+
+    det = ChessBoardDetector(camera_index=args.camera)
+    try:
+        expect = start_position_state()
+
+        if args.all_sides:
+            print("\n시작 배치라고 가정하고 네 방향을 모두 시험합니다.\n")
+            orig = vd.ROBOT_SIDE
+            best = None
+            for side in ("left", "right", "top", "bottom"):
+                vd.ROBOT_SIDE = side
+                obs = det.get_board_state()
+                n = agreement(obs, expect)
+                print(f"  ROBOT_SIDE = {side:6s} → 64칸 중 {n}칸 일치")
+                if best is None or n > best[0]:
+                    best = (n, side, obs)
+            vd.ROBOT_SIDE = orig
+            print(f"\n가장 잘 맞는 방향: ROBOT_SIDE = \"{best[1]}\" ({best[0]}/64)")
+            if best[0] < 56:
+                print("  ⚠️ 최고점도 낮습니다 → 방향 문제가 아니라 기물 자체를")
+                print("     못 읽고 있을 가능성이 큽니다. --thresh 를 낮춰 보세요.")
+            elif best[1] != orig:
+                print(f"  → vision/detect.py 의 ROBOT_SIDE 를 \"{best[1]}\" 로 고치세요.")
+            else:
+                print("  → 현재 설정이 맞습니다.")
+            print("\n그 방향으로 읽은 결과 (대문자=시작배치와 다른 칸):")
+            print(format_state(best[2], expect))
+            return
+
+        obs = det.get_board_state()
+        print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\",  "
+              f"OCC_DIFF_THRESH = {vd.OCC_DIFF_THRESH}")
+        print("\n카메라가 읽은 배치 (대문자=시작배치와 다른 칸):")
+        print(format_state(obs, expect))
+        print(f"\n시작 배치와 {agreement(obs, expect)}/64 칸 일치")
+        print()
+        print(det.explain_board_state())
+        print("\n판단 요령:")
+        print("  · 기물 있는 칸의 |차이| 가 임계보다 작다  → --thresh 를 낮춘다")
+        print("  · 빈 칸이 기물로 잡힌다                  → --thresh 를 올린다")
+        print("  · 기물은 잡히는데 엉뚱한 칸에 있다        → --all-sides 로 방향 확인")
+    finally:
+        det.close()
+
+
+if __name__ == "__main__":
+    main()

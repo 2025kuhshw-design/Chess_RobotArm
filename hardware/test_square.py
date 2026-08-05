@@ -180,6 +180,7 @@ def main():
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
+        print("              board  기물 인식·판 방향 점검 (시작 배치와 대조)")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
     print("  ⚠️ 시작 시 아무 명령도 보내지 않습니다. 첫 이동 명령부터 제어 시작.")
@@ -400,6 +401,29 @@ def main():
                     else:
                         try: show_live(float(arg))       # 'show 10' = 10초만
                         except ValueError: print("  show | show off | show <초>")
+                elif p[0] == "board":
+                    # 기물 인식이 되는지 / 판 방향이 맞는지 그 자리에서 확인
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    import vision.detect as vd
+                    from vision.detect import format_state
+                    expect = [["empty"] * 8 for _ in range(8)]
+                    for c in range(8):
+                        expect[0][c] = expect[1][c] = "white"
+                        expect[6][c] = expect[7][c] = "black"
+                    obs = det_src.get_board_state()
+                    n = sum(obs[r][c] == expect[r][c]
+                            for r in range(8) for c in range(8))
+                    print(f"  ROBOT_SIDE=\"{vd.ROBOT_SIDE}\"  "
+                          f"OCC_DIFF_THRESH={vd.OCC_DIFF_THRESH}")
+                    print("  (대문자 = 시작 배치와 다른 칸)")
+                    print(format_state(obs, expect))
+                    print(f"  시작 배치와 {n}/64 칸 일치")
+                    print(detector.explain_board_state())
+                    if n < 56:
+                        print("  → python vision/check_board.py --camera <번호> "
+                              "--all-sides 로 방향까지 확인해 보세요")
+
                 elif p[0] == "mark":
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
