@@ -96,11 +96,94 @@ def main():
 
     WIN = "test_square view"
 
+    class LiveView:
+        """백그라운드 스레드로 카메라 창을 계속 띄운다.
+
+        input()은 블로킹이라 메인 스레드에서는 GUI 이벤트를 돌릴 수 없다.
+        그래서 별도 스레드가 read→그리기→waitKey 를 반복한다.
+        ⚠️ 카메라를 두 곳에서 읽으면 프레임을 서로 뺏는다. 그래서 이 스레드가
+           읽기를 독점하고, 마커 검출은 여기 저장된 최신 프레임을 쓴다.
+        """
+        def __init__(self, det):
+            import threading
+            self.det = det
+            self._frame = None
+            self._lock = threading.Lock()
+            self._stop = threading.Event()
+            self._th = None
+
+        def start(self):
+            import threading
+            if self._th is not None:
+                return
+            self._stop.clear()
+            self._th = threading.Thread(target=self._loop, daemon=True)
+            self._th.start()
+
+        def stop(self):
+            if self._th is None:
+                return
+            self._stop.set()
+            self._th.join(timeout=2)
+            self._th = None
+            try:
+                import cv2
+                cv2.destroyWindow(WIN)
+                cv2.waitKey(1)
+            except Exception:
+                pass
+
+        @property
+        def running(self):
+            return self._th is not None
+
+        def latest(self):
+            with self._lock:
+                return None if self._frame is None else self._frame.copy()
+
+        def _loop(self):
+            import cv2
+            while not self._stop.is_set():
+                ok, f = self.det.cap.read()
+                if not ok:
+                    continue
+                with self._lock:
+                    self._frame = f
+                try:
+                    cv2.imshow(WIN, self.det.overlay_debug(f))
+                    cv2.waitKey(30)
+                except Exception:
+                    break     # GUI를 못 쓰는 환경이면 조용히 종료
+
+    live = LiveView(detector) if detector is not None else None
+
+    class _DetProxy:
+        """정렬 루틴이 라이브 뷰의 최신 프레임을 쓰도록 감싼다.
+        뷰가 꺼져 있으면 원래대로 detector가 직접 읽는다."""
+        def __init__(self, det, view):
+            self.det, self.view = det, view
+
+        def find_marker(self):
+            if self.view is not None and self.view.running:
+                for _ in range(5):          # 최신 프레임으로 몇 번 재시도
+                    f = self.view.latest()
+                    if f is not None:
+                        r = self.det.find_marker(f)
+                        if r is not None:
+                            return r
+                    time.sleep(0.05)
+                return None
+            return self.det.find_marker()
+
+        def __getattr__(self, k):
+            return getattr(self.det, k)
+
+    det_src = _DetProxy(detector, live) if detector is not None else None
+
     def show_once():
         """프레임 한 장을 창에 갱신. 이동/정렬 중 호출용.
-        ⚠️ 이것만 호출하고 input()으로 가면 창이 '응답 없음'이 된다.
-           GUI 이벤트를 몇 번 돌려줘야 그려진다."""
-        if detector is None:
+        라이브 뷰 스레드가 돌고 있으면 그쪽이 알아서 갱신하므로 아무것도 안 한다."""
+        if detector is None or (live is not None and live.running):
             return
         try:
             import cv2
@@ -121,6 +204,8 @@ def main():
         보인다. 대신 여기서 정해진 시간만큼 이벤트 루프를 직접 돌린다."""
         if detector is None:
             print("  --camera 옵션으로 실행해야 합니다"); return
+        if live is not None and live.running:
+            print("  라이브 뷰가 이미 켜져 있습니다 ('show off'로 끄기)"); return
         try:
             import cv2
         except Exception as e:
@@ -142,7 +227,7 @@ def main():
         """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신)."""
         if detector is None:
             return
-        align_over_square(arm, detector, sq[0], sq[1], _safe_lift(*sq),
+        align_over_square(arm, det_src, sq[0], sq[1], _safe_lift(*sq),
                           view_cb=show_once)
         show_once()
 
@@ -159,7 +244,7 @@ def main():
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 38 140 180 | home | q")
     if detector is not None:
-        print("  카메라 명령: show [초] 라이브뷰 | mark 마커위치 | "
+        print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
@@ -274,7 +359,7 @@ def main():
                         print("  --camera 옵션으로 실행해야 합니다"); continue
                     import vision.detect as vd
                     vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
-                    mk = detector.find_marker()
+                    mk = det_src.find_marker()
                     if mk is None:
                         print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인"); continue
                     oc, orow = mk[0] - sq[0], mk[1] - sq[1]
@@ -285,17 +370,23 @@ def main():
                     print(f"    MARKER_OFFSET_COL = {oc:.3f}")
                     print(f"    MARKER_OFFSET_ROW = {orow:.3f}")
                 elif p[0] in ("show", "view"):
-                    # 'show' → 8초, 'show 20' → 20초 라이브
-                    secs = 8.0
-                    if len(p) == 2:
-                        try: secs = float(p[1])
-                        except ValueError: pass
-                    show_live(secs)
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    arg = p[1] if len(p) == 2 else "on"
+                    if arg in ("off", "0", "stop"):
+                        live.stop(); print("  라이브 뷰 종료")
+                    elif arg in ("on", "1"):
+                        live.start()
+                        print("  라이브 뷰 시작 — 창을 띄운 채로 계속 명령할 수 있습니다")
+                        print("  ('show off'로 종료. 창의 X 버튼으로는 닫지 마세요)")
+                    else:
+                        try: show_live(float(arg))       # 'show 10' = 10초만
+                        except ValueError: print("  show | show off | show <초>")
                 elif p[0] == "mark":
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
                     show()
-                    mk = detector.find_marker()
+                    mk = det_src.find_marker()
                     if mk is None:
                         import vision.detect as vd
                         a = detector._last_marker_area
@@ -357,6 +448,8 @@ def main():
             print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
     if detector is not None:
+        if live is not None:
+            live.stop()
         try:
             import cv2
             cv2.destroyAllWindows()
