@@ -94,11 +94,30 @@ def main():
     cur = None       # 현재 대상 칸 (col,row)
     holding = False  # 기물을 흡착해 들고 있는 중인가
 
-    def align(sq):
-        """카메라가 있으면 하강 전에 정렬."""
+    def show(win_name="test_square view"):
+        """카메라가 있으면 현재 프레임(마커 표시 포함)을 창으로 띄운다.
+        --mode vision과 달리 이 프로그램 자신이 카메라를 이미 열고 있으므로
+        별도 프로세스 충돌 없이 같이 볼 수 있다."""
         if detector is None:
             return
+        try:
+            import cv2
+            ret, frame = detector.cap.read()
+            if not ret:
+                return
+            debug = detector.overlay_debug(frame)
+            cv2.imshow(win_name, debug)
+            cv2.waitKey(1)   # 창을 그리고 넘어감 (여기서 멈추지 않음)
+        except Exception:
+            pass   # 화면 표시 실패는 무시 — 보정 자체엔 지장 없음
+
+    def align(sq):
+        """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신)."""
+        if detector is None:
+            return
+        show()
         align_over_square(arm, detector, sq[0], sq[1], _safe_lift(*sq))
+        show()
 
     def goto(col, row, lift, suction=False):
         """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는
@@ -112,6 +131,9 @@ def main():
 
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 38 140 180 | home | q")
+    if detector is not None:
+        print("  카메라 명령: show(=view) 화면보기 | mark 마커위치 | "
+              "markcal <칸> 오프셋측정")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
     print("  ⚠️ 시작 시 아무 명령도 보내지 않습니다. 첫 이동 명령부터 제어 시작.")
@@ -235,9 +257,15 @@ def main():
                     print(f"  영구 적용하려면 vision/detect.py 에:")
                     print(f"    MARKER_OFFSET_COL = {oc:.3f}")
                     print(f"    MARKER_OFFSET_ROW = {orow:.3f}")
+                elif p[0] in ("show", "view"):
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    show()
+                    print("  창을 띄웠습니다 (다른 명령을 입력하면 계속 갱신됩니다)")
                 elif p[0] == "mark":
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
+                    show()
                     mk = detector.find_marker()
                     if mk is None:
                         import vision.detect as vd
@@ -300,6 +328,11 @@ def main():
             print("\n  [중단] 현재 위치에서 멈춤. 전원 확인하세요.")
 
     if detector is not None:
+        try:
+            import cv2
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
         detector.close()
     arm.close()
     print("[test_square] 종료 (팔은 현재 위치 유지)")
