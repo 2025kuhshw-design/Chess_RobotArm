@@ -49,12 +49,20 @@ ROBOT_SIDE = "left"
 # 여기에 등록한다. 카메라가 이 마커를 보고 "지금 실제로 어디에 가 있는지"를
 # 알아내 오차만큼 다시 움직인다(폐루프 보정).
 #   기계적 유격 탓에 오차가 매번 달라지므로 고정 보정식으로는 한계가 있다.
-# HSV 범위. OpenCV의 H는 0~179. 기본값은 형광 분홍/마젠타 계열.
-#   빨강처럼 H가 0에서 끊기는 색은 구간을 둘로 나눠 넣는다.
+# HSV 범위. OpenCV의 H는 0~179.
+# 기본값은 **빨강** — 흡착기 마운트에 감긴 빨간 점퍼선을 그대로 마커로 쓴다.
+# 빨강은 H가 0에서 끊기므로 구간을 둘로 나눠야 한다.
 MARKER_HSV_RANGES = [
-    ((140,  90,  90), (175, 255, 255)),   # 분홍~마젠타
+    ((  0, 110,  80), ( 10, 255, 255)),   # 빨강 (H 낮은 쪽)
+    ((170, 110,  80), (179, 255, 255)),   # 빨강 (H 높은 쪽)
 ]
 MARKER_MIN_AREA = 40      # 이보다 작은 덩어리는 잡음으로 무시 (탑뷰 픽셀)
+
+# 마커가 흡착컵 중심 바로 위에 있지 않을 때의 보정 (칸 단위).
+# 예: 마커가 흡착컵보다 파일 방향으로 +0.3칸 치우쳐 보이면 (0.3, 0.0).
+# test_square의 'markcal <칸>' 명령으로 자동 측정할 수 있다.
+MARKER_OFFSET_COL = 0.0
+MARKER_OFFSET_ROW = 0.0
 
 
 def chess_to_grid(col: int, row: int) -> tuple:
@@ -355,7 +363,9 @@ class ChessBoardDetector:
         if M["m00"] == 0:
             return None
         px, py = M["m10"] / M["m00"], M["m01"] / M["m00"]
-        return grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
+        c, r = grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
+        # 마커가 흡착컵 바로 위가 아니면 그 차이를 빼서 흡착컵 위치로 환산
+        return (c - MARKER_OFFSET_COL, r - MARKER_OFFSET_ROW)
 
     def close(self):
         if self.cap is not None:

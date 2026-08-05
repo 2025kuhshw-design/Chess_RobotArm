@@ -25,6 +25,7 @@ import argparse
 import sys
 import os
 import time
+import math
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import hardware.arm_controller as ac
@@ -214,6 +215,36 @@ def main():
                     cur = sq
                     print(f"  {p[0]} 위 안전높이로 이동")
                     goto(*sq, lift=True, suction=holding)
+                elif p[0] == "markcal" and len(p) == 2:
+                    # 흡착컵을 그 칸 중심에 정확히 맞춰 둔 상태에서 실행.
+                    # 마커가 보이는 위치와의 차이를 오프셋으로 저장한다.
+                    sq = parse_square(p[1])
+                    if not sq:
+                        print("  칸 이름 오류 (예: markcal e5)"); continue
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    import vision.detect as vd
+                    vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
+                    mk = detector.find_marker()
+                    if mk is None:
+                        print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인"); continue
+                    oc, orow = mk[0] - sq[0], mk[1] - sq[1]
+                    vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW = oc, orow
+                    print(f"  마커 오프셋 = 파일 {oc:+.2f}칸, 랭크 {orow:+.2f}칸 "
+                          f"({math.hypot(oc,orow)*2.91:.1f}mm)")
+                    print(f"  영구 적용하려면 vision/detect.py 에:")
+                    print(f"    MARKER_OFFSET_COL = {oc:.3f}")
+                    print(f"    MARKER_OFFSET_ROW = {orow:.3f}")
+                elif p[0] == "mark":
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    mk = detector.find_marker()
+                    if mk is None:
+                        print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인 "
+                              "(--mode vision 으로 색 튜닝)")
+                    else:
+                        print(f"  마커 위치: 파일 {mk[0]:+.2f}, 랭크 {mk[1]:+.2f} "
+                              f"(가장 가까운 칸 {chr(97+int(round(mk[0])))}{int(round(mk[1]))+1})")
                 elif p[0] == "check":
                     # 현재 캘리브레이션·보정 기준으로 어느 칸에 닿는지 지도 출력
                     print("  도달 지도 (O=닿음, .=서보범위 밖)   랭크8=로봇쪽")
