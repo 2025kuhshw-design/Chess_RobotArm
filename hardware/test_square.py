@@ -64,8 +64,8 @@ def main():
     ap.add_argument("--no-confirm", action="store_true",
                     help="pick/place에서 칸 위 확인 단계를 생략하고 바로 하강")
     ap.add_argument("--camera", type=int, default=None,
-                    help="카메라 번호를 주면 하강 전 카메라로 위치를 보고 "
-                         "오차만큼 다시 움직여 정렬한다(폐루프 보정)")
+                    help="카메라 번호(이 PC는 보통 1). 주면 하강 전 카메라로 "
+                         "위치를 보고 오차만큼 다시 움직여 정렬한다(폐루프 보정)")
     args = ap.parse_args()
 
     # auto_home=False: 시작하자마자 팔을 움직이지 않는다.
@@ -94,10 +94,12 @@ def main():
     cur = None       # 현재 대상 칸 (col,row)
     holding = False  # 기물을 흡착해 들고 있는 중인가
 
-    def show(win_name="test_square view"):
-        """카메라가 있으면 현재 프레임(마커 표시 포함)을 창으로 띄운다.
-        --mode vision과 달리 이 프로그램 자신이 카메라를 이미 열고 있으므로
-        별도 프로세스 충돌 없이 같이 볼 수 있다."""
+    WIN = "test_square view"
+
+    def show_once():
+        """프레임 한 장을 창에 갱신. 이동/정렬 중 호출용.
+        ⚠️ 이것만 호출하고 input()으로 가면 창이 '응답 없음'이 된다.
+           GUI 이벤트를 몇 번 돌려줘야 그려진다."""
         if detector is None:
             return
         try:
@@ -105,19 +107,44 @@ def main():
             ret, frame = detector.cap.read()
             if not ret:
                 return
-            debug = detector.overlay_debug(frame)
-            cv2.imshow(win_name, debug)
-            cv2.waitKey(1)   # 창을 그리고 넘어감 (여기서 멈추지 않음)
+            cv2.imshow(WIN, detector.overlay_debug(frame))
+            for _ in range(3):      # 이벤트 루프를 몇 번 돌려 실제로 그려지게
+                cv2.waitKey(1)
         except Exception:
             pass   # 화면 표시 실패는 무시 — 보정 자체엔 지장 없음
+
+    def show_live(seconds=8.0):
+        """지정 시간 동안 라이브로 보여준다. 아무 키나 누르면 종료.
+
+        input()은 블로킹이라 그 동안 GUI 이벤트가 처리되지 않는다. 그래서
+        '창을 띄워두고 프롬프트로 돌아가는' 방식은 Windows에서 응답 없음으로
+        보인다. 대신 여기서 정해진 시간만큼 이벤트 루프를 직접 돌린다."""
+        if detector is None:
+            print("  --camera 옵션으로 실행해야 합니다"); return
+        try:
+            import cv2
+        except Exception as e:
+            print(f"  창을 열 수 없습니다: {e}"); return
+        print(f"  라이브 뷰 {seconds:.0f}초 — 아무 키나 누르면 종료")
+        t0 = time.time()
+        while time.time() - t0 < seconds:
+            ret, frame = detector.cap.read()
+            if not ret:
+                continue
+            cv2.imshow(WIN, detector.overlay_debug(frame))
+            if cv2.waitKey(30) != -1:      # 키 입력 시 즉시 종료
+                break
+        print("  라이브 뷰 종료")
+
+    show = show_once
 
     def align(sq):
         """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신)."""
         if detector is None:
             return
-        show()
-        align_over_square(arm, detector, sq[0], sq[1], _safe_lift(*sq))
-        show()
+        align_over_square(arm, detector, sq[0], sq[1], _safe_lift(*sq),
+                          view_cb=show_once)
+        show_once()
 
     def goto(col, row, lift, suction=False):
         """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는
@@ -132,7 +159,7 @@ def main():
     print("\n명령: e4 | down | up | pick e2 | place e4 | move e2 e4 | "
           "set 38 140 180 | home | q")
     if detector is not None:
-        print("  카메라 명령: show(=view) 화면보기 | mark 마커위치 | "
+        print("  카메라 명령: show [초] 라이브뷰 | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
@@ -258,10 +285,12 @@ def main():
                     print(f"    MARKER_OFFSET_COL = {oc:.3f}")
                     print(f"    MARKER_OFFSET_ROW = {orow:.3f}")
                 elif p[0] in ("show", "view"):
-                    if detector is None:
-                        print("  --camera 옵션으로 실행해야 합니다"); continue
-                    show()
-                    print("  창을 띄웠습니다 (다른 명령을 입력하면 계속 갱신됩니다)")
+                    # 'show' → 8초, 'show 20' → 20초 라이브
+                    secs = 8.0
+                    if len(p) == 2:
+                        try: secs = float(p[1])
+                        except ValueError: pass
+                    show_live(secs)
                 elif p[0] == "mark":
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue

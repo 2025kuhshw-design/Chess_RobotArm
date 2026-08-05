@@ -40,13 +40,14 @@ def colrow_to_xy(col_f: float, row_f: float) -> tuple:
 
 def align_over_square(arm, detector, col: int, row: int, lift: float,
                       tol=ALIGN_TOL_CELLS, max_iter=ALIGN_MAX_ITER,
-                      gain=ALIGN_GAIN, verbose=True) -> bool:
+                      gain=ALIGN_GAIN, verbose=True, view_cb=None) -> bool:
     """목표 칸 위에서 카메라를 보며 흡착컵을 정렬한다.
 
     arm      : RealArm
     detector : ChessBoardDetector (find_marker 사용)
     col,row  : 목표 칸
     lift     : 접근 높이 (m)
+    view_cb  : 매 반복마다 호출되는 콜백(화면 갱신용). None이면 생략
     반환     : True=허용치 안으로 수렴, False=마커 미검출 또는 미수렴
     """
     # 현재 명령 중인 목표 (연속 좌표). 보정하며 이 값을 조금씩 옮긴다.
@@ -54,6 +55,8 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
     last_err = None
 
     for i in range(max_iter):
+        if view_cb is not None:
+            view_cb()
         mk = detector.find_marker()
         if mk is None:
             if verbose:
@@ -98,6 +101,8 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
         import time
         import hardware.arm_controller as ac
         time.sleep(ac.SETTLE_WAIT)      # 흔들림이 멎은 뒤 다시 측정
+        if view_cb is not None:
+            view_cb()
 
     if verbose:
         print(f"    [정렬] {max_iter}회 반복 후에도 허용치 미달 — 그대로 진행")
