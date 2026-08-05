@@ -169,6 +169,28 @@ def main():
     print(f"\n  저장: {os.path.relpath(OUT_PATH)}")
     print("  다음 실행부터 자동으로 적용됩니다 (utils/ik_solver.py가 읽음).")
 
+    # 보정식이 가장자리 칸을 서보 범위 밖으로 밀어낼 수 있으므로 확인
+    import importlib
+    import utils.ik_solver as iks
+    importlib.reload(iks)
+    from hardware.arm_controller import RealArm as _RA, _safe_lift as _sl
+    import hardware.arm_controller as _ac
+    lost = []
+    for c in range(8):
+        for r in range(8):
+            try:
+                _RA._rad_to_servo(*iks.inverse_kinematics(*_ac.touch_xyz(c, r)))
+                _RA._rad_to_servo(*iks.inverse_kinematics(
+                    *iks.safe_approach_xyz(c, r, _sl(c, r))))
+            except ValueError:
+                lost.append(f"{chr(97+c)}{r+1}")
+    print(f"\n  보정 적용 후 도달 가능: {64-len(lost)}/64 칸")
+    if lost:
+        print(f"  ⚠️ 도달 불가: {' '.join(lost)}")
+        print("     보정식이 가장자리 칸을 서보 범위 밖으로 밀어낸 것입니다.")
+        print("     측정 점을 보드 가장자리 쪽으로 더 넓게 잡으면 개선됩니다.")
+        print(f"     되돌리려면 {os.path.relpath(OUT_PATH)} 를 지우세요.")
+
 
 if __name__ == "__main__":
     main()

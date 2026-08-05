@@ -30,6 +30,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import hardware.arm_controller as ac
 from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
 from utils.ik_solver import inverse_kinematics, chess_square_to_xyz, safe_approach_xyz
+import utils.ik_solver as iks
+
+
+def ac_fit_active() -> bool:
+    """실측 보정(board_fit.json)이 로드돼 있는지."""
+    return getattr(iks, "_BOARD_FIT", None) is not None
 
 
 def parse_square(sq: str):
@@ -53,6 +59,8 @@ def main():
                     help="스텝 간 대기(s). 클수록 느리고 안전 (기본 0.05)")
     ap.add_argument("--no-startup", action="store_true",
                     help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
+    ap.add_argument("--no-confirm", action="store_true",
+                    help="pick/place에서 칸 위 확인 단계를 생략하고 바로 하강")
     args = ap.parse_args()
 
     # auto_home=False: 시작하자마자 팔을 움직이지 않는다.
@@ -124,24 +132,45 @@ def main():
                 if not sq:
                     print("  칸 이름 오류 (예: e2)"); continue
                 cur = sq
-                print(f"  {p[1]} 집기 (이후 흡착 유지 — place로 놓을 때까지)")
+                print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True)
                 time.sleep(ac.SETTLE_WAIT)
+                if not args.no_confirm:
+                    # 칸 위에 멈춰서 흡착컵이 기물 바로 위에 있는지 눈/카메라로 확인
+                    ans = input("    흡착컵이 기물 바로 위인가요? "
+                                "[Enter=하강] [x=취소] [칸이름=그 칸으로 다시] > ").strip().lower()
+                    if ans in ("x", "q", "n"):
+                        print("    취소 — 하강하지 않음"); continue
+                    if ans:
+                        sq2 = parse_square(ans)
+                        if sq2:
+                            cur = sq2; sq = sq2
+                            print(f"    {ans} 위로 다시 이동")
+                            goto(*sq, lift=True); time.sleep(ac.SETTLE_WAIT)
+                        else:
+                            print("    입력 무시 — 그대로 하강")
+                print("    하강 → 흡착")
                 goto(*sq, lift=False)
                 time.sleep(ac.SETTLE_WAIT)   # 흔들림 가라앉힌 뒤 흡착
                 arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=True)
                 time.sleep(0.6)
                 goto(*sq, lift=True, suction=True)   # 든 채로 상승
                 holding = True
+                print("    집기 완료 (흡착 유지 — place로 놓을 때까지)")
 
             elif p[0] == "place" and len(p) == 2:
                 sq = parse_square(p[1])
                 if not sq:
                     print("  칸 이름 오류 (예: e4)"); continue
                 cur = sq
-                print(f"  {p[1]}에 놓기")
+                print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
                 time.sleep(ac.SETTLE_WAIT)
+                if not args.no_confirm:
+                    ans = input("    이 칸에 놓을까요? [Enter=하강] [x=취소] > ").strip().lower()
+                    if ans in ("x", "q", "n"):
+                        print("    취소 — 하강하지 않음 (기물은 계속 들고 있음)"); continue
+                print("    하강 → 놓기")
                 goto(*sq, lift=False, suction=holding)   # 든 채로 하강
                 time.sleep(ac.SETTLE_WAIT)   # 흔들림 가라앉힌 뒤 놓기
                 arm.move(*inverse_kinematics(*ac.touch_xyz(*sq)), suction=False)
@@ -163,6 +192,26 @@ def main():
                     cur = sq
                     print(f"  {p[0]} 위 안전높이로 이동")
                     goto(*sq, lift=True, suction=holding)
+                elif p[0] == "check":
+                    # 현재 캘리브레이션·보정 기준으로 어느 칸에 닿는지 지도 출력
+                    print("  도달 지도 (O=닿음, .=서보범위 밖)   랭크8=로봇쪽")
+                    print("          " + "  ".join("abcdefgh"))
+                    n = 0
+                    for r in range(7, -1, -1):
+                        row = []
+                        for c in range(8):
+                            try:
+                                arm._rad_to_servo(*inverse_kinematics(*ac.touch_xyz(c, r)))
+                                arm._rad_to_servo(*inverse_kinematics(
+                                    *safe_approach_xyz(c, r, _safe_lift(c, r))))
+                                row.append("O"); n += 1
+                            except ValueError:
+                                row.append(".")
+                        print(f"   랭크{r+1}  " + "  ".join(row))
+                    print(f"  → {n}/64 칸 도달 가능")
+                    if ac_fit_active():
+                        print("  ※ 실측 보정(board_fit.json)이 적용된 상태입니다.")
+                        print("    가장자리 칸이 범위 밖이면 보정식 외삽 때문일 수 있습니다.")
                 elif p[0] == "zoff":
                     # 하강 깊이를 mm 단위로 실시간 조정 (값 찾기용)
                     if len(p) == 2:
@@ -177,8 +226,8 @@ def main():
                     print(f"  흡착 {'ON (유지)' if holding else 'OFF'} "
                           f"— 위치 A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]} 유지")
                 else:
-                    print("  명령: e4 | down | up | pick e2 | place e4 | "
-                          "move e2 e4 | home | q")
+                    print("  명령: e4 | down | up | pick e2 | place e4 | move e2 e4")
+                    print("        check | zoff 8 | suction 1 | set 38 140 180 | home | q")
 
         except ValueError as e:
             print(f"  [실패] {e}")
