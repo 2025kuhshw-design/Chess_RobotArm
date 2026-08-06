@@ -55,6 +55,10 @@ USB/
 | `stage2_final.zip` + `stage2_vecnorm.pkl` | 구글드라이브 `MyDrive/chess_robot/correction_model/` | ⭕ 재학습 완료본 사용 |
 | `calibration.json` | **가져가지 말 것** | ❌ 현장에서 새로 생성 |
 
+> **설치 환경마다 다른 파일** (전부 git 제외 — 현장에서 새로 만든다):
+> `vision/calibration.json` · `vision/colors.json` · `vision/empty_ref.npz` · `vision/board_fit.json`
+> 색 설정은 `colors.json` 에 들어가므로 `git pull` 과 충돌하지 않는다.
+
 > 오프라인 대비: 집에서 `pip download -r requirements.txt -d USB\offline_backup\wheels`
 
 ---
@@ -739,7 +743,7 @@ python main.py --mode real --port COM5 --camera 1 --view \
 python vision/pick_pieces.py --camera 1
 #  1 누르고 → 흰쪽 기물 윗면 클릭 (여러 개)
 #  2 누르고 → 검은쪽 기물 윗면 클릭
-#  s 저장 (PIECE_COLOR_MODE 가 자동으로 켜진다)
+#  s 저장 → vision/colors.json (색 방식이 자동으로 켜진다)
 ```
 
 화면 아래에 `cells white=16 black=16` 이 뜨면 성공.
@@ -800,7 +804,7 @@ python vision/pick_marker.py --camera 1
 
 창에서 **마커를 클릭**하면 그 픽셀의 HSV를 재서 범위를 만든다.
 잡힌 영역이 초록으로 칠해지므로 **마커만 초록**이 되도록 몇 번 더 클릭한다.
-`s` 를 누르면 `vision/detect.py` 에 바로 저장된다.
+`s` 를 누르면 `vision/colors.json` 에 저장된다 (git 제외 파일이라 pull과 충돌 없음).
 
 | 화면 표시 | 뜻 |
 |---|---|

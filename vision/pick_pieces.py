@@ -20,7 +20,7 @@
 
   1  키를 누른 뒤 → **흰쪽 기물** 윗면을 클릭 (여러 개 클릭할수록 좋음)
   2  키를 누른 뒤 → **검은쪽 기물** 윗면을 클릭
-  s  vision/detect.py 에 저장하고 PIECE_COLOR_MODE 를 켠다
+  s  vision/colors.json 에 저장하고 색 방식을 켠다
   r  초기화   q  저장 없이 종료
 
 화면에서 흰쪽은 초록, 검은쪽은 파랑으로 칠해진다.
@@ -37,7 +37,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from vision.detect import (ChessBoardDetector, CELL_SIZE_PX,
-                           PIECE_COLOR_MIN_FRAC, MARKER_HSV_RANGES)
+                           PIECE_COLOR_MIN_FRAC, MARKER_HSV_RANGES,
+                           save_colors, COLORS_PATH)
 
 WIN = "pick pieces  (1=white side  2=black side  s=save  r=reset  q=quit)"
 SAMPLE = 5                       # 클릭 지점 주변 표본 크기 (홀수)
@@ -72,34 +73,19 @@ def warn_marker_clash(rw, rb):
                 print("       pick_marker.py 로 마커 색을 바꾸세요.")
 
 
-def write_to_detect(rw, rb):
-    """detect.py 의 기물 색 설정을 새 값으로 교체하고 색 방식을 켠다."""
-    path = os.path.join(os.path.dirname(__file__), "detect.py")
-    src = open(path, encoding="utf-8").read()
+def write_colors(rw, rb):
+    """실측한 기물 색을 vision/colors.json 에 저장하고 색 방식을 켠다.
 
-    def fmt(name, r):
-        if r is None:
-            return f"{name} = []"
-        return f"{name} = [\n    ({r[0]}, {r[1]}),   # pick_pieces.py 로 실측\n]"
-
-    # ⚠️ 반드시 줄머리(^)에 고정할 것. 위쪽 설명 주석에도
-    #    "PIECE_COLOR_MODE = True 로 켠다" 라는 문구가 있어서, 고정하지 않으면
-    #    그 주석이 먼저 걸리고 정작 진짜 설정값은 False 로 남는다(실제로 겪음).
-    subs = [
-        (r"^PIECE_COLOR_MODE = \w+", "PIECE_COLOR_MODE = True"),
-        (r"^PIECE_HSV_WHITE = \[.*?\]", fmt("PIECE_HSV_WHITE", rw)),
-        (r"^PIECE_HSV_BLACK = \[.*?\]", fmt("PIECE_HSV_BLACK", rb)),
-    ]
-    for pat, rep in subs:
-        new, n = re.subn(pat, rep, src, count=1, flags=re.S | re.M)
-        if n == 0:
-            print(f"  [실패] detect.py 에서 {pat} 를 못 찾았습니다.")
-            return False
-        src = new
-    open(path, "w", encoding="utf-8").write(src)
-    print(f"  저장 완료 → {path}")
+    ⚠️ detect.py 를 직접 고치지 않는다. detect.py 는 git이 추적하는 파일이라
+       고치면 `git pull` 이 매번 충돌한다. 색은 설치 환경마다 다른 값이므로
+       calibration.json 처럼 별도 파일에 둔다(git 제외).
+    """
+    save_colors(white=[rw] if rw else [],
+                black=[rb] if rb else [],
+                color_mode=True)
+    print(f"  저장 완료 → {COLORS_PATH}")
     print(f"    PIECE_COLOR_MODE = True")
-    print(f"    흰쪽  {rw}")
+    print(f"    흰쪽   {rw}")
     print(f"    검은쪽 {rb}")
     return True
 
@@ -197,7 +183,7 @@ def main():
                 rw = make_range(samples["w"]) if samples["w"] else None
                 rb = make_range(samples["b"]) if samples["b"] else None
                 warn_marker_clash(rw, rb)
-                if write_to_detect(rw, rb):
+                if write_colors(rw, rb):
                     print("  확인: python vision/check_board.py "
                           f"--camera {args.camera}")
                 break

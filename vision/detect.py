@@ -118,6 +118,74 @@ MARKER_OFFSET_COL = 0.0
 MARKER_OFFSET_ROW = 0.0
 
 # ─────────────────────────────────────────
+# 실측한 색 설정 (vision/colors.json)
+# ─────────────────────────────────────────
+# ⚠️ 색은 조명·카메라·기물마다 다르므로 **설치 환경마다 다른 값**이다.
+#    calibration.json 과 같은 성격이라 git에 올리지 않는다.
+#
+# 예전에는 pick_pieces.py / pick_marker.py 가 이 파일(detect.py)을 직접
+# 고쳤다. 그런데 detect.py 는 git이 추적하는 파일이라, 색을 등록할 때마다
+# `git pull` 이 "로컬 변경이 덮어써진다"며 실패했다. 그래서 값만 따로 뺐다.
+# 위의 기본값은 그대로 두고, 파일이 있으면 그 값으로 덮어쓴다.
+COLORS_PATH = os.path.join(os.path.dirname(__file__), "colors.json")
+
+
+def _as_ranges(v):
+    """[[[h,s,v],[h,s,v]], ...] → [((h,s,v),(h,s,v)), ...]"""
+    return [(tuple(lo), tuple(hi)) for lo, hi in v]
+
+
+def load_colors(path: str = None) -> bool:
+    """colors.json 이 있으면 색 설정을 그 값으로 바꾼다. 반환: 로드했는가."""
+    global MARKER_HSV_RANGES, PIECE_HSV_WHITE, PIECE_HSV_BLACK, PIECE_COLOR_MODE
+    path = path or COLORS_PATH
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        print(f"[Detector] colors.json 읽기 실패: {e} (기본 색 사용)")
+        return False
+    if d.get("marker"):
+        MARKER_HSV_RANGES = _as_ranges(d["marker"])
+    if "white" in d:
+        PIECE_HSV_WHITE = _as_ranges(d["white"] or [])
+    if "black" in d:
+        PIECE_HSV_BLACK = _as_ranges(d["black"] or [])
+    if "color_mode" in d:
+        PIECE_COLOR_MODE = bool(d["color_mode"])
+    return True
+
+
+def save_colors(marker=None, white=None, black=None, color_mode=None,
+                path: str = None):
+    """colors.json 에 색 설정을 저장한다. None 인 항목은 기존 값을 유지."""
+    path = path or COLORS_PATH
+    d = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            d = {}
+    if marker is not None:
+        d["marker"] = [[list(lo), list(hi)] for lo, hi in marker]
+    if white is not None:
+        d["white"] = [[list(lo), list(hi)] for lo, hi in white]
+    if black is not None:
+        d["black"] = [[list(lo), list(hi)] for lo, hi in black]
+    if color_mode is not None:
+        d["color_mode"] = bool(color_mode)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+    load_colors(path)          # 방금 저장한 값을 바로 반영
+    return path
+
+
+load_colors()
+
+# ─────────────────────────────────────────
 # 사람 수 인식 (합법수 대조 방식)
 # ─────────────────────────────────────────
 # 1등 후보가 2등보다 이만큼 앞서야 '확실하다'고 본다.

@@ -11,7 +11,7 @@
   1. 팔을 체스판 위(마커가 카메라에 보이는 위치)로 옮겨 둔다
   2. 창이 뜨면 **마커 위를 클릭**한다 (여러 번 클릭하면 범위가 넓어진다)
   3. 화면에 잡힌 영역이 초록으로 표시된다 — 마커만 초록이면 성공
-  4. `s` 를 누르면 vision/detect.py 에 바로 적용
+  4. `s` 를 누르면 vision/colors.json 에 저장된다
      `r` 초기화 / `q` 저장 없이 종료
 
 ⚠️ 팔이 체스판 밖에 있으면 탑뷰에 안 나온다. 먼저 test_square 로
@@ -28,7 +28,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from vision.detect import (ChessBoardDetector, TOP_SIZE, CELL_SIZE_PX,
-                           MARKER_MIN_AREA, MARKER_MAX_AREA)
+                           MARKER_MIN_AREA, MARKER_MAX_AREA,
+                           save_colors, COLORS_PATH)
 
 WIN = "pick marker  (click marker / s=save  r=reset  q=quit)"
 # 클릭 지점 주변 이 크기의 정사각형을 표본으로 삼는다 (홀수)
@@ -59,18 +60,13 @@ def make_range(samples):
 
 
 def write_to_detect(lo, hi):
-    """vision/detect.py 의 MARKER_HSV_RANGES 를 새 값으로 교체."""
-    path = os.path.join(os.path.dirname(__file__), "detect.py")
-    src = open(path, encoding="utf-8").read()
-    new = (f"MARKER_HSV_RANGES = [\n"
-           f"    ({lo}, {hi}),   # pick_marker.py 로 실측\n"
-           f"]")
-    pat = re.compile(r"MARKER_HSV_RANGES = \[.*?\n\]", re.S)
-    if not pat.search(src):
-        print("  [실패] detect.py 에서 MARKER_HSV_RANGES 를 못 찾았습니다.")
-        return False
-    open(path, "w", encoding="utf-8").write(pat.sub(new, src, count=1))
-    print(f"  저장 완료 → {path}")
+    """실측한 마커 색을 vision/colors.json 에 저장한다.
+
+    ⚠️ detect.py 를 직접 고치지 않는다 — git이 추적하는 파일이라 고치면
+       `git pull` 이 매번 충돌한다.
+    """
+    save_colors(marker=[(lo, hi)])
+    print(f"  저장 완료 → {COLORS_PATH}")
     print(f"    MARKER_HSV_RANGES = [({lo}, {hi})]")
     return True
 
@@ -102,7 +98,7 @@ def main():
     cv2.setMouseCallback(WIN, on_mouse, param)
 
     print("\n마커 위를 클릭하세요. 여러 번 클릭하면 범위가 넓어집니다.")
-    print("  s=detect.py에 저장   r=초기화   q=저장 없이 종료\n")
+    print("  s=colors.json에 저장   r=초기화   q=저장 없이 종료\n")
 
     try:
         while True:
