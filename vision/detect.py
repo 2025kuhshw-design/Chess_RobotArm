@@ -435,6 +435,16 @@ class ChessBoardDetector:
                 if frac[gy, gx] < OCC_AREA_FRAC:
                     line.append("empty")
                     continue
+                # 기물 색을 양쪽 다 등록했는데 그 칸에서 어느 색도 안 보이면
+                # 기물이 없는 것이다. 이때 밝기로 추측하면 안 된다.
+                # ⚠️ 빈 판 기준 영상이 낡으면(판·카메라가 움직이거나 조명이
+                #    바뀌면) 빈 칸에서도 '변했다'가 나온다. 예전에는 그걸
+                #    밝기로 흑/백 아무거나 찍어서 빈 랭크가 기물로 가득 찼다.
+                if (use_color and PIECE_HSV_WHITE and PIECE_HSV_BLACK
+                        and fw[gy, gx] < PIECE_COLOR_MIN_FRAC
+                        and fb[gy, gx] < PIECE_COLOR_MIN_FRAC):
+                    line.append("empty")
+                    continue
                 fallback = "white" if dm > 0 else "black"
                 line.append(self._side_from_color(fw[gy, gx], fb[gy, gx], fallback)
                             if use_color else fallback)
@@ -509,7 +519,10 @@ class ChessBoardDetector:
                 raise RuntimeError("카메라 프레임 읽기 실패")
 
         top = self._get_top_view(frame)
-        if PIECE_COLOR_MODE and (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
+        # 양쪽 기물 색이 다 등록돼 있으면 색만으로 확실히 판정된다.
+        # 빈 판 기준 영상이 낡아도(판·카메라 이동, 조명 변화) 영향받지 않는다.
+        if (PIECE_HSV_WHITE and PIECE_HSV_BLACK) or \
+           (PIECE_COLOR_MODE and (PIECE_HSV_WHITE or PIECE_HSV_BLACK)):
             return self._state_from_color(top)
         if self._ref is not None:
             return self._state_from_ref(top, expect)

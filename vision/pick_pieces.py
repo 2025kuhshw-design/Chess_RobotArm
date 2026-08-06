@@ -82,13 +82,16 @@ def write_to_detect(rw, rb):
             return f"{name} = []"
         return f"{name} = [\n    ({r[0]}, {r[1]}),   # pick_pieces.py 로 실측\n]"
 
+    # ⚠️ 반드시 줄머리(^)에 고정할 것. 위쪽 설명 주석에도
+    #    "PIECE_COLOR_MODE = True 로 켠다" 라는 문구가 있어서, 고정하지 않으면
+    #    그 주석이 먼저 걸리고 정작 진짜 설정값은 False 로 남는다(실제로 겪음).
     subs = [
-        (r"PIECE_COLOR_MODE = \w+", "PIECE_COLOR_MODE = True"),
-        (r"PIECE_HSV_WHITE = \[.*?\]", fmt("PIECE_HSV_WHITE", rw)),
-        (r"PIECE_HSV_BLACK = \[.*?\]", fmt("PIECE_HSV_BLACK", rb)),
+        (r"^PIECE_COLOR_MODE = \w+", "PIECE_COLOR_MODE = True"),
+        (r"^PIECE_HSV_WHITE = \[.*?\]", fmt("PIECE_HSV_WHITE", rw)),
+        (r"^PIECE_HSV_BLACK = \[.*?\]", fmt("PIECE_HSV_BLACK", rb)),
     ]
     for pat, rep in subs:
-        new, n = re.subn(pat, rep, src, count=1, flags=re.S)
+        new, n = re.subn(pat, rep, src, count=1, flags=re.S | re.M)
         if n == 0:
             print(f"  [실패] detect.py 에서 {pat} 를 못 찾았습니다.")
             return False
