@@ -312,9 +312,18 @@ class RealArm:
         time.sleep(INIT_WAIT_SEC)   # 아두이노 리셋 대기
 
         # 초기화 메시지에서 펌웨어 버전 확인 (.ino 재업로드 누락 감지)
+        # ⚠️ in_waiting 만 보고 끊으면 안 된다. 바이트 사이 잠깐의 공백에도
+        #    0이 되어 "READY fw=3" 을 놓치고 엉뚱한 펌웨어 경고가 뜬다.
+        #    READY 를 볼 때까지, 또는 시간 제한까지 기다린다.
         banner = ""
-        while self._ser.in_waiting:
-            banner += self._ser.readline().decode(errors="replace").strip() + " "
+        deadline = time.time() + INIT_WAIT_SEC
+        while time.time() < deadline:
+            if self._ser.in_waiting:
+                banner += self._ser.readline().decode(errors="replace").strip() + " "
+                if "READY" in banner:
+                    break
+            else:
+                time.sleep(0.05)
         print(f"[ArmController] 시리얼 연결: {port} @ {baudrate}baud")
 
         fw = None
@@ -370,15 +379,21 @@ class RealArm:
             print(f"  [SIM] {cmd.strip()}")
             return
 
+        # ⚠️ 이전 명령의 잔여 응답이 남아 있으면 이번 명령의 답으로 오독한다.
+        #    (그러면 서보가 아직 안 움직였는데 다음 스텝을 보내게 된다)
+        self._ser.reset_input_buffer()
         self._ser.write(cmd.encode())
         deadline = time.time() + CMD_TIMEOUT_SEC
         while time.time() < deadline:
             if self._ser.in_waiting:
-                resp = self._ser.readline().decode().strip()
+                resp = self._ser.readline().decode(errors="replace").strip()
                 if resp == "OK":
                     return
-                elif resp == "ERR":
+                if resp == "ERR":
                     raise RuntimeError(f"아두이노 ERR 응답: {cmd.strip()}")
+                # 그 외(부팅 메시지 등)는 무시하고 계속 기다린다
+            else:
+                time.sleep(0.002)
         raise TimeoutError(f"아두이노 응답 타임아웃: {cmd.strip()}")
 
     # ─────────────────────────────────────────
@@ -423,7 +438,8 @@ class RealArm:
                      is_capture: bool = False,
                      rl_correction=None,
                      confirm: bool = False,
-                     aligner=None):
+                     aligner=None,
+                     ops=None):
         """
         from_sq, to_sq = (col, row)
         rl_correction = (delta_q1, delta_q2, delta_q3) or None
@@ -431,6 +447,9 @@ class RealArm:
             (사람이 눈으로 보고 판단)
         aligner=f(col, row, lift, suction) 를 주면 하강 직전마다 호출해
             카메라 폐루프 보정을 한다. None이면 보정 없이 진행.
+        ops = 실행할 동작 목록 (utils.chess_utils.physical_ops 가 만든다).
+            캐슬링·앙파상은 규칙상 한 수라도 물리적으로는 동작이 여러 개다.
+            주지 않으면 from→to 한 번만 (잡기면 도착칸 제거 후).
         """
         # 카메라 정렬이 옮겨놓은 양(칸 단위). 뒤이은 하강·흡착에도 그대로
         # 적용해야 한다. ⚠️ 예전에는 이 값을 버리고 하강할 때 IK를 원래 칸
@@ -490,23 +509,17 @@ class RealArm:
                     return None
             return rl_correction
 
-        fc, fr = from_sq
-        tc, tr = to_sq
-
-        print(f"  [실행] {from_sq} → {to_sq}  capture={is_capture}")
-
-        # 기물 잡기: 도착 칸 기물 먼저 제거
-        if is_capture:
-            _move_to(tc, tr, lift=True)
+        def _clear_square(col, row):
+            """그 칸 기물을 집어 보드 밖 캡처 구역에 내려놓는다."""
+            _move_to(col, row, lift=True)
             time.sleep(SETTLE_WAIT)
-            _align(tc, tr)                   # 카메라 보정 후 하강
-            _move_to(tc, tr, lift=False)
+            _align(col, row)                 # 카메라 보정 후 하강
+            _move_to(col, row, lift=False)
             time.sleep(SETTLE_WAIT)
             # 같은 자세 그대로 흡착만 켠다 (위치를 다시 계산하면 보정이 풀린다)
-            _move_to(tc, tr, lift=False, suction=True)
+            _move_to(col, row, lift=False, suction=True)
             time.sleep(SUCTION_ON_WAIT)
-            _move_to(tc, tr, lift=True, suction=True)     # 든 채로 상승
-            # 잡은 기물은 보드 밖 캡처 구역에 내려놓음 (항상 도달 가능한 위치)
+            _move_to(col, row, lift=True, suction=True)     # 든 채로 상승
             off[0] = off[1] = 0.0        # 보드 밖 — 칸 정렬 오프셋은 무의미
             x_out, y_out, z_out = capture_slot_xyz(self._captured_count)
             self._captured_count += 1
@@ -519,39 +532,69 @@ class RealArm:
             self.move(*q_down, suction=False)             # 여기서 놓음
             time.sleep(SUCTION_OFF_WAIT)
             self.move(*q_out, suction=False)
+            off[0] = off[1] = 0.0
 
-        # 1) 출발 칸 위 안전 높이
-        _move_to(fc, fr, lift=True)
-        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
-        _align(fc, fr)                   # 카메라 보정
-        if not _ask("흡착컵이 집을 기물 바로 위인가요?"):
-            print("    건너뜀 — 기물을 손으로 옮겨주세요"); self.home(); return
-        # 2) 출발 칸 하강
-        _move_to(fc, fr, lift=False)
-        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 흡착
-        # 3) 흡착기 ON — 같은 자세 그대로. 위치를 다시 계산하면 정렬·RL
-        #    보정이 풀려 흡착 직전에 팔이 그만큼 튄다.
-        _move_to(fc, fr, lift=False, suction=True)
-        time.sleep(SUCTION_ON_WAIT)
-        # 4) 안전 높이로 상승 (기물 든 상태 유지)
-        _move_to(fc, fr, lift=True, suction=True)
-        # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
-        #    출발 칸의 정렬 오프셋을 도착 칸에 쓰면 안 되므로 먼저 지운다.
-        off[0] = off[1] = 0.0
-        _move_to(tc, tr, lift=True, suction=True)
-        time.sleep(SETTLE_WAIT)
-        _align(tc, tr, suction=True)     # 기물 든 채로 보정 (흡착 유지)
-        _ask("이 칸에 놓을까요?")   # 취소해도 어차피 놓아야 하므로 진행
-        # 6) 도착 칸 하강 (기물 든 상태 유지)
-        _move_to(tc, tr, lift=False, suction=True)
-        time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 놓기
-        # 7) 흡착기 OFF — 여기서 처음으로 놓는다 (자세는 그대로)
-        _move_to(tc, tr, lift=False, suction=False)
-        time.sleep(SUCTION_OFF_WAIT)
-        # 8) 안전 높이로 상승
-        _move_to(tc, tr, lift=True)
-        # 9) 홈 복귀
-        self.home()
+        def _pick_place(fc, fr, tc, tr):
+            """출발 칸 기물을 집어 도착 칸에 놓는다. 반환 False=사람이 건너뜀."""
+            # 1) 출발 칸 위 안전 높이
+            _move_to(fc, fr, lift=True)
+            time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
+            _align(fc, fr)                   # 카메라 보정
+            if not _ask("흡착컵이 집을 기물 바로 위인가요?"):
+                print("    건너뜀 — 기물을 손으로 옮겨주세요")
+                return False
+            # 2) 출발 칸 하강
+            _move_to(fc, fr, lift=False)
+            time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 흡착
+            # 3) 흡착기 ON — 같은 자세 그대로. 위치를 다시 계산하면 정렬·RL
+            #    보정이 풀려 흡착 직전에 팔이 그만큼 튄다.
+            _move_to(fc, fr, lift=False, suction=True)
+            time.sleep(SUCTION_ON_WAIT)
+            # 4) 안전 높이로 상승 (기물 든 상태 유지)
+            _move_to(fc, fr, lift=True, suction=True)
+            # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
+            #    출발 칸의 정렬 오프셋을 도착 칸에 쓰면 안 되므로 먼저 지운다.
+            off[0] = off[1] = 0.0
+            _move_to(tc, tr, lift=True, suction=True)
+            time.sleep(SETTLE_WAIT)
+            _align(tc, tr, suction=True)     # 기물 든 채로 보정 (흡착 유지)
+            _ask("이 칸에 놓을까요?")   # 취소해도 어차피 놓아야 하므로 진행
+            # 6) 도착 칸 하강 (기물 든 상태 유지)
+            _move_to(tc, tr, lift=False, suction=True)
+            time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 놓기
+            # 7) 흡착기 OFF — 여기서 처음으로 놓는다 (자세는 그대로)
+            _move_to(tc, tr, lift=False, suction=False)
+            time.sleep(SUCTION_OFF_WAIT)
+            # 8) 안전 높이로 상승
+            _move_to(tc, tr, lift=True)
+            off[0] = off[1] = 0.0
+            return True
+
+        # ── 실행할 동작 목록 ──
+        # ops 를 주면 그대로, 없으면 예전과 똑같이 (잡기 시 도착칸 제거 후 이동).
+        # ⚠️ 캐슬링·앙파상은 '한 수 = 동작 하나'가 아니다. main.py 가
+        #    utils.chess_utils.physical_ops 로 분해해 넘긴다.
+        if ops is None:
+            ops = ([("clear", tuple(to_sq))] if is_capture else []) \
+                  + [("move", tuple(from_sq), tuple(to_sq))]
+
+        print(f"  [실행] {from_sq} → {to_sq}  capture={is_capture}"
+              + (f"  (동작 {len(ops)}개)" if len(ops) > 1 else ""))
+
+        try:
+            for op in ops:
+                if op[0] == "clear":
+                    print(f"    · 치우기 {op[1]}")
+                    _clear_square(op[1][0], op[1][1])
+                elif op[0] == "move":
+                    if len(ops) > 1:
+                        print(f"    · 옮기기 {op[1]} → {op[2]}")
+                    if not _pick_place(op[1][0], op[1][1], op[2][0], op[2][1]):
+                        break
+                else:
+                    print(f"    [경고] 알 수 없는 동작: {op}")
+        finally:
+            self.home()
 
     # ─────────────────────────────────────────
     # 메서드: home

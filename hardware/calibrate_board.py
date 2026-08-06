@@ -22,6 +22,8 @@ import json
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import hardware.arm_controller as ac
 from hardware.arm_controller import RealArm, _safe_lift, interactive_startup
@@ -48,7 +50,6 @@ def fit_affine(samples):
         dy = d*x + e*y + f
     최소제곱으로 6개 계수를 구한다. 점이 3개 미만이면 평균 오프셋만.
     """
-    import numpy as np
     n = len(samples)
     if n == 0:
         return None
@@ -68,7 +69,6 @@ def fit_affine(samples):
 
 def residuals(fit, samples):
     """보정 후 남는 오차 (mm)."""
-    import numpy as np
     out = []
     for x, y, dx, dy in samples:
         px = fit["coef_x"][0]*x + fit["coef_x"][1]*y + fit["coef_x"][2]

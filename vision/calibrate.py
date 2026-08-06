@@ -75,7 +75,6 @@ class CameraCalibrator:
         if event == cv2.EVENT_LBUTTONDOWN and len(self.corners) < 4:
             self.corners.append([x, y])
             label = CORNER_LABELS[len(self.corners) - 1]
-            color = CORNER_COLORS[len(self.corners) - 1]
             print(f"  코너 {len(self.corners)}/4 지정: {label} → ({x}, {y})")
 
             if len(self.corners) == 4:
@@ -160,7 +159,6 @@ class CameraCalibrator:
                 cv2.putText(display, "computed 8x8 edge", (10, 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-            remaining = 4 - len(self.corners)
             status_text = (f"코너 {len(self.corners)}/4 지정됨"
                            if self.corners else "체스판 코너를 클릭하세요")
             cv2.putText(display, status_text, (10, 30),

@@ -20,14 +20,13 @@
 
 import argparse
 import os
-import re
 import sys
 
 import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from vision.detect import (ChessBoardDetector, TOP_SIZE, CELL_SIZE_PX,
+from vision.detect import (ChessBoardDetector,
                            MARKER_MIN_AREA, MARKER_MAX_AREA,
                            save_colors, COLORS_PATH)
 

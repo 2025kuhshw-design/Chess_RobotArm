@@ -6,7 +6,6 @@
 import math
 import os
 import json
-import numpy as np
 
 # ─────────────────────────────────────────
 # 하이퍼파라미터 / 상수
@@ -25,9 +24,9 @@ SHOULDER_HEIGHT = 0.089   # 실측: 테이블 위 9cm - 보드두께 1mm
 # 서보 가동범위에 맞는 쪽을 골라야 한다. 한쪽이 서보 범위를 벗어나면 반대로.
 ELBOW_SIGN = -1
 
-# 체스판 위치 조정 (팔 길이 295mm 기준, 전체 칸 도달 가능하도록)
-# 체스판 중심을 원점에서 x=130mm 거리에 배치
-# 가장 먼 칸까지 거리 ≈ 270mm < 유효 도달 283mm
+# 체스판 배치 (실측). 중심은 s1 축에서 (x=22.7cm, y=+5.7cm).
+# 팔 길이 295mm 이라 랭크1~2 와 g3·h3 는 닿지 않는다(46/64칸).
+# 배치를 바꾸려면 hardware/plan_board_pos.py 로 먼저 계산해 볼 것.
 BOARD_ORIGIN_X = 0.110   # 체스판 근단(랭크8 쪽) x (m) — 도달범위 최적화 배치
 BOARD_ORIGIN_Y = -0.060  # 체스판 우단(파일a 쪽) y (m) — 베이스 가동범위에 맞춰 편향
 CELL_SIZE      = 0.029125  # 한 칸 크기 (m) — 23.3cm ÷ 8칸
@@ -35,7 +34,7 @@ PIECE_Z        = 0.0045  # 기물 두께 (m) — 자작 원판/사각판 4~5mm
                          # ⚠️ 기물을 바꾸면 반드시 다시 잴 것. 이 값이 실제보다
                          #    크면 흡착컵이 기물에 닿기 전에 멈춰 진공이 안 걸린다.
                          #    (이전 기물은 7mm였다)
-LIFT_DEFAULT   = 0.04    # 안전 접근 높이 (m) — 기물이 7mm라 4cm면 충분
+LIFT_DEFAULT   = 0.04    # 안전 접근 높이 (m) — 기물 4~5mm 기준 충분
 
 
 # ─────────────────────────────────────────
@@ -164,36 +163,42 @@ def safe_approach_xyz(col: int, row: int, lift: float = LIFT_DEFAULT) -> tuple:
 # 단독 실행: IK → FK 왕복 검증
 # ─────────────────────────────────────────
 if __name__ == "__main__":
-    test_targets = [
-        (0.20, 0.05, 0.10),
-        (0.30, -0.10, 0.05),
-        (0.15, 0.10, 0.20),
-    ]
+    # ⚠️ 예전 자체 테스트는 (0.30,-0.10,0.05) 같은 **작업 공간 밖** 좌표를
+    #    넣고 "실패"라고 찍었다. 도달 불가는 정상 동작인데 실패로 보고하면
+    #    진짜 문제와 구분이 안 된다. 실제 쓰임(체스 칸)으로 바꾼다.
+    print("=== IK → FK 왕복 검증 (체스 64칸) ===")
+    worst = 0.0
+    reach, unreach = [], []
+    for row in range(8):
+        for col in range(8):
+            name = f"{chr(ord('a')+col)}{row+1}"
+            target = chess_square_to_xyz(col, row)
+            try:
+                q = inverse_kinematics(*target)
+            except ValueError:
+                unreach.append(name)
+                continue
+            back = forward_kinematics(*q)
+            err = math.dist(back, target) * 1000
+            worst = max(worst, err)
+            reach.append(name)
 
-    print("=== IK → FK 왕복 검증 ===")
-    all_pass = True
-    for target in test_targets:
-        x, y, z = target
-        try:
-            q1, q2, q3 = inverse_kinematics(x, y, z)
-            fx, fy, fz = forward_kinematics(q1, q2, q3)
-            err = math.sqrt((x - fx)**2 + (y - fy)**2 + (z - fz)**2) * 1000
-            status = "PASS" if err < 1.0 else "FAIL"
-            if status == "FAIL":
-                all_pass = False
-            print(f"  목표({x:.3f},{y:.3f},{z:.3f}) | "
-                  f"q=({math.degrees(q1):.1f}°,{math.degrees(q2):.1f}°,{math.degrees(q3):.1f}°) | "
-                  f"오차={err:.3f}mm [{status}]")
-        except ValueError as e:
-            print(f"  [{x},{y},{z}] → {e}")
-            all_pass = False
-
-    print()
-    print("=== 체스 칸 좌표 변환 ===")
-    for col, row in [(0, 0), (3, 3), (7, 7)]:
-        xyz = chess_square_to_xyz(col, row)
-        safe = safe_approach_xyz(col, row)
-        print(f"  칸({col},{row}) → {xyz}  안전접근→ {safe}")
+    print(f"  도달 가능 {len(reach)}칸 / 불가 {len(unreach)}칸")
+    print(f"  왕복 최대 오차: {worst:.6f} mm")
+    if unreach:
+        print(f"  (닿지 않는 칸: {' '.join(unreach)})")
+        print("   팔 길이 29.5cm 의 한계 — 로봇은 흑만 옮기므로 진행엔 무방하다.")
+        print("   배치를 바꿔 보려면: python hardware/plan_board_pos.py")
 
     print()
-    print("✅ test_ik 완료" if all_pass else "❌ test_ik 실패 (오차 > 1mm)")
+    print("=== 안전 접근 높이 ===")
+    for name, (col, row) in [("a8", (0, 7)), ("d5", (3, 4)), ("h4", (7, 3))]:
+        x, y, z = chess_square_to_xyz(col, row)
+        sx, sy, sz = safe_approach_xyz(col, row)
+        print(f"  {name}: 기물 z={z*1000:.1f}mm → 접근 z={sz*1000:.1f}mm  "
+              f"(x={x*100:.1f} y={y*100:+.1f} cm)")
+
+    print()
+    passed = worst < 0.001 and len(reach) > 0
+    print("✅ test_ik 통과 (왕복 오차 < 0.001mm)" if passed
+          else f"❌ test_ik 실패 (왕복 오차 {worst:.6f}mm)")

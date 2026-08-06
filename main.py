@@ -188,7 +188,8 @@ def _ask_uci(board):
 def run_game(args, arm, detector, rl_model):
     from utils.ik_solver   import inverse_kinematics, chess_square_to_xyz
     from utils.lagrange    import check_torque_feasibility
-    from utils.chess_utils import stockfish_move, move_to_squares, is_capture
+    from utils.chess_utils import (stockfish_move, move_to_squares,
+                                   is_capture, physical_ops)
 
     try:
         board = chess.Board(args.fen)
@@ -251,11 +252,19 @@ def run_game(args, arm, detector, rl_model):
         else:
             print("  로봇이 생각 중...")
             move = stockfish_move(board, args.stockfish)
+            if move is None:
+                print("  [경고] 엔진이 수를 못 냈습니다 (게임 종료?)"); break
             from_sq, to_sq = move_to_squares(move)
             capture = is_capture(board, move)
+            # ⚠️ 규칙상 한 수라도 물리적으로는 동작이 여러 개일 수 있다
+            #    (캐슬링=킹+룩, 앙파상=옆 칸 폰 제거). board.push 前에 분해해야
+            #    is_castling/is_en_passant 판정이 된다.
+            ops, notes = physical_ops(board, move)
 
             board.push(move)
             print(f"  로봇: {move}  {'(기물 잡기)' if capture else ''}")
+            for n in notes:
+                print(f"    {n}")
 
             # 역기구학
             x, y, z = chess_square_to_xyz(*from_sq)
@@ -279,7 +288,8 @@ def run_game(args, arm, detector, rl_model):
                 arm.execute_move(from_sq, to_sq, is_capture=capture,
                                  rl_correction=correction,
                                  confirm=args.confirm,
-                                 aligner=aligner)
+                                 aligner=aligner,
+                                 ops=ops)
             except ValueError as e:
                 print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
                 print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")

@@ -122,4 +122,8 @@ class DetectorProxy:
         return self.det.detect_move_with_rules(board, frame_src=self._borrow_fresh)
 
     def __getattr__(self, k):
+        # ⚠️ __init__ 이전이나 det 가 없을 때 self.det 를 찾으면 다시
+        #    __getattr__ 이 불려 무한 재귀에 빠진다. 명시적으로 끊는다.
+        if k == "det":
+            raise AttributeError(k)
         return getattr(self.det, k)

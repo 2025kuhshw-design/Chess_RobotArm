@@ -503,6 +503,14 @@ class ChessBoardDetector:
     def _state_from_ref(self, top, expect=None):
         """빈 판 기준 영상과 픽셀 단위로 비교해 8×8 상태를 만든다."""
         cur = self._cell_patches(top)
+        # ⚠️ 기준 영상이 다른 설정(TOP_SIZE 등)에서 찍혔으면 모양이 안 맞는다.
+        #    그대로 빼면 브로드캐스트 오류로 죽으므로 미리 알리고 되돌린다.
+        if cur.shape != self._ref.shape:
+            print(f"[Detector] 빈 판 기준 영상 크기 불일치 "
+                  f"{self._ref.shape} vs {cur.shape} → 무시하고 밝기 방식 사용")
+            print("           다시 찍으세요: check_board.py --capture-empty")
+            self._ref = None
+            return None
         d = cur - self._ref
 
         # 전역 밝기 변화 보정 — 조명이 전체적으로 밝아/어두워진 만큼만 뺀다.
@@ -640,7 +648,10 @@ class ChessBoardDetector:
            (PIECE_COLOR_MODE and (PIECE_HSV_WHITE or PIECE_HSV_BLACK)):
             return self._state_from_color(top)
         if self._ref is not None:
-            return self._state_from_ref(top, expect)
+            st = self._state_from_ref(top, expect)
+            if st is not None:
+                return st
+            # 기준 영상이 못 쓰게 됐으면 아래 밝기 방식으로 이어간다
 
         means = self._cell_means(top)
         lv, dv = self._empty_levels(means, expect)
@@ -755,7 +766,6 @@ class ChessBoardDetector:
 
         반환: (chess.Move, 점수, 후보목록) 또는 (None, 0, 후보목록)
         """
-        import chess
 
         expect = board_to_state(board)
         observed = self.get_stable_board_state(frame_src=frame_src, expect=expect)
