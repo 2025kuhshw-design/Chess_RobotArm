@@ -44,6 +44,24 @@ PIXEL_DIFF_THRESH = 12
 # 기물이 작으면 낮추고, 빈 칸이 자꾸 잡히면 올린다.
 OCC_AREA_FRAC = 0.18
 
+# ─────────────────────────────────────────
+# 기물 윗면 색으로 판정 (가장 확실한 방법)
+# ─────────────────────────────────────────
+# 카메라는 기물의 **윗면만** 본다. 그러니 윗면을 체스판에 없는 색으로 칠하면
+# 판 색깔과 상관없이 확실하게 구분된다.
+#   · 검은 기물 윗면에 검은 테이프 → 어두운 칸과 같은 색 → 영원히 구분 불가
+#   · 검은 기물 윗면에 빨간 테이프 → 판에 빨강이 없으므로 100% 구분
+#
+# 양쪽 기물 윗면에 서로 다른 색 스티커/테이프를 붙이고 아래를 채운 뒤
+# PIECE_COLOR_MODE = True 로 켠다. 색은 pick_pieces.py 로 실측한다.
+#   python vision/pick_pieces.py --camera 1
+PIECE_COLOR_MODE = False
+PIECE_HSV_WHITE = []      # 흰쪽(사람) 기물 윗면 색 — [(lo, hi), ...]
+PIECE_HSV_BLACK = []      # 검은쪽(로봇) 기물 윗면 색
+# 셀 중앙에서 그 색이 이 비율 이상이면 기물이 있다고 본다.
+# 기물이 작으면 낮춘다. 0.06 ≈ 셀 중앙(30x30px)의 54px.
+PIECE_COLOR_MIN_FRAC = 0.08
+
 # 디버그 오버레이 색상 (BGR)
 LABEL_COLOR  = (0, 215, 255)    # 칸 좌표 라벨: 노랑
 ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
@@ -303,6 +321,54 @@ class ChessBoardDetector:
                   f"→ {EMPTY_REF_PATH}")
         return self._ref
 
+    # ─────────────────────────────────────────
+    # 기물 윗면 색으로 판정
+    # ─────────────────────────────────────────
+    @staticmethod
+    def _color_mask(hsv, ranges):
+        m = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for lo, hi in ranges:
+            m |= cv2.inRange(hsv, np.array(lo), np.array(hi))
+        return m
+
+    def _state_from_color(self, top):
+        """셀 중앙에서 두 기물 색이 각각 몇 %인지 보고 판정한다.
+
+        판 색깔과 무관하므로 '검은 기물 vs 어두운 칸' 문제가 원천적으로 없다.
+        """
+        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+        mw = self._color_mask(hsv, PIECE_HSV_WHITE)
+        mb = self._color_mask(hsv, PIECE_HSV_BLACK)
+        k = np.ones((3, 3), np.uint8)
+        mw = cv2.morphologyEx(mw, cv2.MORPH_OPEN, k)
+        mb = cv2.morphologyEx(mb, cv2.MORPH_OPEN, k)
+
+        m0 = int(CELL_SIZE_PX * 0.2)
+        fw = np.zeros((8, 8), np.float32)
+        fb = np.zeros((8, 8), np.float32)
+        for gy in range(8):
+            for gx in range(8):
+                sl = (slice(gy*CELL_SIZE_PX + m0, (gy+1)*CELL_SIZE_PX - m0),
+                      slice(gx*CELL_SIZE_PX + m0, (gx+1)*CELL_SIZE_PX - m0))
+                fw[gy, gx] = (mw[sl] > 0).mean()
+                fb[gy, gx] = (mb[sl] > 0).mean()
+
+        board = []
+        for row in range(8):
+            line = []
+            for col in range(8):
+                gx, gy = chess_to_grid(col, row)
+                w, b = float(fw[gy, gx]), float(fb[gy, gx])
+                if max(w, b) < PIECE_COLOR_MIN_FRAC:
+                    line.append("empty")
+                else:
+                    line.append("white" if w >= b else "black")
+            board.append(line)
+        self._last_frac = np.maximum(fw, fb)
+        self._last_fw, self._last_fb = fw, fb
+        self._last_means = None
+        return board
+
     def _state_from_ref(self, top, expect=None):
         """빈 판 기준 영상과 픽셀 단위로 비교해 8×8 상태를 만든다."""
         cur = self._cell_patches(top)
@@ -406,6 +472,8 @@ class ChessBoardDetector:
                 raise RuntimeError("카메라 프레임 읽기 실패")
 
         top = self._get_top_view(frame)
+        if PIECE_COLOR_MODE and (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
+            return self._state_from_color(top)
         if self._ref is not None:
             return self._state_from_ref(top, expect)
 
@@ -425,6 +493,19 @@ class ChessBoardDetector:
 
     def explain_board_state(self, expect=None) -> str:
         """마지막 판독의 숫자를 표로 보여준다 — 임계값을 조정할 때 쓴다."""
+        if PIECE_COLOR_MODE and getattr(self, "_last_fw", None) is not None:
+            lines = [f"  기물 윗면 색으로 판정 (임계 {PIECE_COLOR_MIN_FRAC*100:.0f}%)",
+                     "  칸별  흰쪽% / 검은쪽% :"]
+            for row in range(7, -1, -1):
+                cells = []
+                for col in range(8):
+                    gx, gy = chess_to_grid(col, row)
+                    cells.append(f"{self._last_fw[gy,gx]*100:3.0f}/{self._last_fb[gy,gx]*100:<3.0f}")
+                lines.append(f"   {row+1} " + " ".join(cells))
+            lines.append("      " + "       ".join("abcdefgh"))
+            lines.append("  둘 다 임계 미만이면 빈 칸. 기물이 작으면 "
+                         "PIECE_COLOR_MIN_FRAC 을 낮춘다.")
+            return "\n".join(lines)
         if getattr(self, "_ref", None) is not None and self._last_frac is not None:
             lines = [f"  빈 판 기준 영상과 비교 (픽셀차 > {PIXEL_DIFF_THRESH} 인 비율)",
                      f"  판정 임계 OCC_AREA_FRAC = {OCC_AREA_FRAC:.2f}",
