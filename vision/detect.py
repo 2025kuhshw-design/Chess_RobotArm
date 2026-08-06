@@ -331,18 +331,14 @@ class ChessBoardDetector:
             m |= cv2.inRange(hsv, np.array(lo), np.array(hi))
         return m
 
-    def _state_from_color(self, top):
-        """셀 중앙에서 두 기물 색이 각각 몇 %인지 보고 판정한다.
-
-        판 색깔과 무관하므로 '검은 기물 vs 어두운 칸' 문제가 원천적으로 없다.
-        """
+    def _color_fracs(self, top):
+        """셀 중앙에서 두 기물 색이 각각 차지하는 비율 (8,8) 두 장."""
         hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
-        mw = self._color_mask(hsv, PIECE_HSV_WHITE)
-        mb = self._color_mask(hsv, PIECE_HSV_BLACK)
         k = np.ones((3, 3), np.uint8)
-        mw = cv2.morphologyEx(mw, cv2.MORPH_OPEN, k)
-        mb = cv2.morphologyEx(mb, cv2.MORPH_OPEN, k)
-
+        mw = cv2.morphologyEx(self._color_mask(hsv, PIECE_HSV_WHITE),
+                              cv2.MORPH_OPEN, k)
+        mb = cv2.morphologyEx(self._color_mask(hsv, PIECE_HSV_BLACK),
+                              cv2.MORPH_OPEN, k)
         m0 = int(CELL_SIZE_PX * 0.2)
         fw = np.zeros((8, 8), np.float32)
         fb = np.zeros((8, 8), np.float32)
@@ -352,7 +348,37 @@ class ChessBoardDetector:
                       slice(gx*CELL_SIZE_PX + m0, (gx+1)*CELL_SIZE_PX - m0))
                 fw[gy, gx] = (mw[sl] > 0).mean()
                 fb[gy, gx] = (mb[sl] > 0).mean()
+        return fw, fb
 
+    @staticmethod
+    def _side_from_color(fw_v, fb_v, fallback):
+        """색 비율로 어느 편 기물인지 정한다.
+
+        한쪽 색만 등록돼 있으면 '그 색이 보이면 그쪽, 아니면 반대쪽'으로 본다.
+        (검은쪽만 파랗게 칠한 경우가 이에 해당)
+        """
+        w_ok = bool(PIECE_HSV_WHITE) and fw_v >= PIECE_COLOR_MIN_FRAC
+        b_ok = bool(PIECE_HSV_BLACK) and fb_v >= PIECE_COLOR_MIN_FRAC
+        if PIECE_HSV_WHITE and PIECE_HSV_BLACK:
+            if w_ok and b_ok:
+                return "white" if fw_v >= fb_v else "black"
+            if w_ok:
+                return "white"
+            if b_ok:
+                return "black"
+            return fallback
+        if PIECE_HSV_BLACK:            # 검은쪽만 칠한 경우
+            return "black" if b_ok else "white"
+        if PIECE_HSV_WHITE:            # 흰쪽만 칠한 경우
+            return "white" if w_ok else "black"
+        return fallback
+
+    def _state_from_color(self, top):
+        """셀 중앙에서 두 기물 색이 각각 몇 %인지 보고 판정한다.
+
+        판 색깔과 무관하므로 '검은 기물 vs 어두운 칸' 문제가 원천적으로 없다.
+        """
+        fw, fb = self._color_fracs(top)
         board = []
         for row in range(8):
             line = []
@@ -390,6 +416,13 @@ class ChessBoardDetector:
         changed = np.abs(d) > PIXEL_DIFF_THRESH
         frac = changed.reshape(8, 8, -1).mean(axis=2)
 
+        # ⚠️ 흑/백 구분을 '칸보다 밝은가'로 하면 안 된다. 같은 색 기물이라도
+        #    어두운 칸에서는 밝게, 밝은 칸에서는 어둡게 보이므로 판정이
+        #    칸 색을 그대로 따라가 격자무늬가 된다(실제로 겪음).
+        #    기물 색이 등록돼 있으면 그것으로 정한다.
+        use_color = bool(PIECE_HSV_WHITE or PIECE_HSV_BLACK)
+        fw, fb = self._color_fracs(top) if use_color else (None, None)
+
         board, dmean = [], np.zeros((8, 8), dtype=np.float32)
         for row in range(8):
             line = []
@@ -400,10 +433,13 @@ class ChessBoardDetector:
                 dmean[gy, gx] = dm
                 if frac[gy, gx] < OCC_AREA_FRAC:
                     line.append("empty")
-                else:
-                    line.append("white" if dm > 0 else "black")
+                    continue
+                fallback = "white" if dm > 0 else "black"
+                line.append(self._side_from_color(fw[gy, gx], fb[gy, gx], fallback)
+                            if use_color else fallback)
             board.append(line)
         self._last_frac, self._last_dmean = frac, dmean
+        self._last_fw, self._last_fb = fw, fb
         self._last_means = None          # 밝기 방식 표는 쓰지 않는다
         return board
 
@@ -519,6 +555,23 @@ class ChessBoardDetector:
             lines.append("     " + "    ".join("abcdefgh"))
             lines.append(f"  {OCC_AREA_FRAC*100:.0f}% 넘으면 기물 있음. "
                          "기물이 작으면 OCC_AREA_FRAC 를 낮춘다.")
+            if getattr(self, "_last_fb", None) is not None:
+                lines.append("")
+                lines.append(f"  흑/백은 색으로 판정 (임계 {PIECE_COLOR_MIN_FRAC*100:.0f}%)."
+                             "  칸별 흰쪽%/검은쪽% :")
+                for row in range(7, -1, -1):
+                    cells = []
+                    for col in range(8):
+                        gx, gy = chess_to_grid(col, row)
+                        cells.append(f"{self._last_fw[gy,gx]*100:3.0f}/"
+                                     f"{self._last_fb[gy,gx]*100:<3.0f}")
+                    lines.append(f"   {row+1} " + " ".join(cells))
+                lines.append("      " + "       ".join("abcdefgh"))
+            else:
+                lines.append("  ⚠️ 기물 색이 등록돼 있지 않아 흑/백을 '칸보다 밝은가'로"
+                             " 판정합니다.")
+                lines.append("     같은 색 기물도 칸 색에 따라 뒤집혀 격자무늬가 됩니다.")
+                lines.append("     → python vision/pick_pieces.py 로 기물 색을 등록하세요.")
             return "\n".join(lines)
         if getattr(self, "_last_means", None) is None:
             return "  (아직 판독한 적이 없습니다)"

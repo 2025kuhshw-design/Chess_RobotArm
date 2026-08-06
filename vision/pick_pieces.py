@@ -182,10 +182,17 @@ def main():
             if k == ord('r'):
                 samples["w"].clear(); samples["b"].clear(); print("  초기화")
             if k == ord('s'):
-                if not samples["w"] or not samples["b"]:
-                    print("  양쪽 다 골라야 합니다 (1 로 흰쪽, 2 로 검은쪽)")
+                if not samples["w"] and not samples["b"]:
+                    print("  최소 한쪽은 골라야 합니다 (1 로 흰쪽, 2 로 검은쪽)")
                     continue
-                rw, rb = make_range(samples["w"]), make_range(samples["b"])
+                if not samples["w"] or not samples["b"]:
+                    only = "검은쪽" if samples["b"] else "흰쪽"
+                    other = "흰쪽" if samples["b"] else "검은쪽"
+                    print(f"  {only}만 등록합니다 → 그 색이 보이면 {only}, "
+                          f"아니면 {other} 으로 봅니다.")
+                    print("  (한쪽만 칠했을 때 쓰는 방식입니다)")
+                rw = make_range(samples["w"]) if samples["w"] else None
+                rb = make_range(samples["b"]) if samples["b"] else None
                 warn_marker_clash(rw, rb)
                 if write_to_detect(rw, rb):
                     print("  확인: python vision/check_board.py "
