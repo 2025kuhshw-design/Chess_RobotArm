@@ -92,7 +92,8 @@ def main():
         except Exception as e:
             print(f"  [카메라] 초기화 실패: {e} → 보정 없이 진행")
 
-    markcal_pts = []  # markcal add 로 모은 (마커col, 마커row, 실제col, 실제row)
+    markcal_pts = []  # markcal 로 모은 (마커col, 마커row, 실제col, 실제row)
+    nudge_off = [0.0, 0.0]   # nudge 로 밀어놓은 누적량 (칸 단위)
     cur = None       # 현재 대상 칸 (col,row)
     holding = False  # 기물을 흡착해 들고 있는 중인가
 
@@ -184,7 +185,7 @@ def main():
     print("        probe s3 180 200 그 관절의 실제 기계 한계를 5도씩 찾아본다")
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
-              "markcal add/fit 시차보정")
+              "markcal auto 시차보정")
         print("              board  기물 인식·판 방향 점검 (시작 배치와 대조)")
         print("              refcap ⭐ 빈 판 기준 영상 찍기 (기물 다 치우고)")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
@@ -311,6 +312,7 @@ def main():
                 if not sq:
                     print("  칸 이름 오류 (예: e2)"); continue
                 cur = sq
+                nudge_off[0] = nudge_off[1] = 0.0
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True)
                 time.sleep(ac.SETTLE_WAIT)
@@ -325,6 +327,7 @@ def main():
                         sq2 = parse_square(ans)
                         if sq2:
                             cur = sq2; sq = sq2
+                            nudge_off[0] = nudge_off[1] = 0.0
                             print(f"    {ans} 위로 다시 이동")
                             goto(*sq, lift=True); time.sleep(ac.SETTLE_WAIT)
                         else:
@@ -343,6 +346,7 @@ def main():
                 if not sq:
                     print("  칸 이름 오류 (예: e4)"); continue
                 cur = sq
+                nudge_off[0] = nudge_off[1] = 0.0
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True,  suction=holding)   # 든 채로 이동
                 time.sleep(ac.SETTLE_WAIT)
@@ -372,8 +376,30 @@ def main():
                 sq = parse_square(p[0])
                 if sq:
                     cur = sq
+                    nudge_off[0] = nudge_off[1] = 0.0
                     print(f"  {p[0]} 위 안전높이로 이동")
                     goto(*sq, lift=True, suction=holding)
+                elif p[0] == "nudge" and len(p) == 3:
+                    # 지금 높이 그대로 판 좌표계로 mm 만큼 옆으로 민다.
+                    # markcal add 를 쓸 때 흡착컵을 칸 중심에 맞추는 용도.
+                    if cur is None:
+                        print("  먼저 칸을 지정하세요 (예: e5)"); continue
+                    try:
+                        df, dr = float(p[1]), float(p[2])
+                    except ValueError:
+                        print("  사용법: nudge <파일mm> <랭크mm>  (예: nudge 2 -3)"); continue
+                    nudge_off[0] += df / 29.125
+                    nudge_off[1] += dr / 29.125
+                    from hardware.visual_align import offset_xy, ALIGN_WORK_LIFT
+                    x, y = offset_xy(cur[0], cur[1], nudge_off[0], nudge_off[1])
+                    try:
+                        arm.move(*inverse_kinematics(x, y, ac.PIECE_Z + ALIGN_WORK_LIFT),
+                                 suction=holding)
+                    except ValueError as e:
+                        print(f"  도달 불가 ({e})"); continue
+                    print(f"  누적 이동: 파일 {nudge_off[0]*29.125:+.1f}mm, "
+                          f"랭크 {nudge_off[1]*29.125:+.1f}mm")
+
                 elif p[0] == "markcal":
                     # ── 마커 위치 → 흡착컵 실제 위치 관계를 재는 명령 ──
                     # ⚠️ 왜 필요한가: 정렬은 '마커'를 칸 중심에 놓는다. 그런데
@@ -387,7 +413,58 @@ def main():
                     import vision.detect as vd
                     sub = p[1] if len(p) >= 2 else "help"
 
-                    if sub == "add" and len(p) == 3:
+                    if sub == "auto":
+                        # ⭐ 팔이 스스로 여러 칸을 돌며 잰다 — 손으로 옮길 필요 없음.
+                        # 논리: 우리가 없애려는 건 '시차'인데, 이건 위치에 비례하는
+                        #   **계통 오차**다. 관절 유격은 매번 방향이 달라지는
+                        #   **무작위 오차**라 여러 점을 최소제곱하면 상쇄된다.
+                        #   그래서 "명령한 칸 = 실제 흡착컵 위치"로 놓고 재도
+                        #   계통 성분(시차)은 제대로 뽑힌다.
+                        from hardware.visual_align import (ALIGN_WORK_LIFT,
+                                                           ALIGN_CLEAR_LIFT)
+                        # 점이 많을수록 유격(무작위 오차)이 상쇄돼 시차(계통 오차)만
+                        # 남는다. 모의실험: 유격 ±5mm 일 때 보정 후 평균 오차가
+                        #   6칸 4.0mm / 12칸 3.2mm / 20칸 2.5mm  (보정 전 4.9mm)
+                        SQUARES = [f"{'abcdefgh'[c]}{r+1}"
+                                   for c in (0, 2, 5, 7) for r in (3, 4, 5, 6, 7)]
+                        print(f"  {len(SQUARES)}칸을 돌며 잽니다 "
+                              f"(약 {len(SQUARES)*4}초). 판 위 기물을 모두 치우세요.")
+                        if input("  준비됐으면 Enter (취소는 x) > ").strip().lower() == "x":
+                            continue
+                        markcal_pts.clear()
+                        sf, so = vd.MARKER_FIT, (vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW)
+                        try:
+                            for name in SQUARES:
+                                sq = parse_square(name)
+                                x, y, _ = chess_square_to_xyz(*sq)
+                                try:
+                                    arm.move(*inverse_kinematics(x, y, ac.PIECE_Z + ALIGN_CLEAR_LIFT))
+                                    arm.move(*inverse_kinematics(x, y, ac.PIECE_Z + ALIGN_WORK_LIFT))
+                                except ValueError as e:
+                                    print(f"    {name}: 도달 불가 — 건너뜀 ({e})"); continue
+                                time.sleep(ac.SETTLE_WAIT)
+                                show_once()
+                                vd.MARKER_FIT = None
+                                vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
+                                mk = det_src.find_marker()
+                                vd.MARKER_FIT = sf
+                                vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW = so
+                                if mk is None:
+                                    print(f"    {name}: 마커 못 찾음 — 건너뜀"); continue
+                                markcal_pts.append((mk[0], mk[1], float(sq[0]), float(sq[1])))
+                                d = math.hypot(mk[0]-sq[0], mk[1]-sq[1]) * 29.125
+                                print(f"    {name}: 마커 ({mk[0]:.2f},{mk[1]:.2f}) "
+                                      f"차이 {d:.1f}mm")
+                        finally:
+                            vd.MARKER_FIT = sf
+                            vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW = so
+                        print(f"  {len(markcal_pts)}점 수집 완료.")
+                        if len(markcal_pts) >= 3:
+                            print("  → 'markcal fit' 으로 계산·저장하세요")
+                        else:
+                            print("  ⚠️ 점이 부족합니다. 마커가 잘 잡히는지 'mark' 로 확인")
+
+                    elif sub == "add" and len(p) == 3:
                         sq = parse_square(p[2])
                         if not sq:
                             print("  칸 이름 오류 (예: markcal add e5)"); continue
@@ -462,7 +539,9 @@ def main():
                         print("  ※ 이건 그 칸에서만 정확합니다. 판 전체를 맞추려면")
                         print("    'markcal add' 를 3칸 이상에서 한 뒤 'markcal fit'")
                     else:
+                        print("  markcal auto       ⭐ 팔이 6칸을 돌며 자동 측정 (권장)")
                         print("  markcal add <칸>   흡착컵을 그 칸 중심에 맞춘 뒤 기록")
+                        print("                     (nudge 로 맞춘다: nudge 2 -3)")
                         print("  markcal fit        3점 이상 모이면 계산·저장")
                         print("  markcal clear      기록·보정 초기화")
                         print("  markcal <칸>       한 칸만 보는 간이 방식")
