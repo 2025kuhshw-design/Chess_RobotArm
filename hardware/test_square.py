@@ -155,12 +155,15 @@ def main():
         show_once()
 
     def aligner_cb(col, row, lift, suction):
-        """execute_move가 하강 직전마다 부르는 콜백."""
+        """execute_move가 하강 직전마다 부르는 콜백.
+        ⚠️ 정렬이 돌려준 보정 오프셋을 그대로 반환해야 한다. 삼키면
+           execute_move 가 하강할 때 원래 칸 좌표로 되돌아간다."""
         if detector is None:
-            return
-        align_over_square(arm, det_src, col, row, lift,
-                          view_cb=show_once, suction=suction)
+            return None
+        off = align_over_square(arm, det_src, col, row, lift,
+                                view_cb=show_once, suction=suction)
         show_once()
+        return off
 
     def goto(col, row, lift, suction=False):
         """suction을 반드시 넘길 것 — 기본값으로 두면 기물을 든 채 이동하는

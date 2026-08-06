@@ -56,6 +56,17 @@ def load_rl_model():
 # ─────────────────────────────────────────
 # 게임 루프
 # ─────────────────────────────────────────
+# RL 보정 한 관절당 최대 허용 크기 (rad).
+# ⚠️ 학습 환경의 행동 범위는 ±0.2rad(11.5°)인데, 정작 학습에 쓴 실제 오차
+#    노이즈는 ±0.03rad(1.7°)뿐이었다. 즉 행동 범위가 고쳐야 할 오차보다
+#    7배 크다. 정책이 덜 수렴하면 큰 값을 내놓고, 그러면 팔이 크게 빗나간다.
+#      한 관절 0.20rad → 끝단 3.4cm (1.2칸)
+#      세 관절 모두   → 끝단 7.1cm (2.4칸)
+#    실제로 e7e5 가 e파일 근처도 못 가고, f8 을 한 칸 빗나갔다.
+#    그래서 '학습이 상정한 오차 크기'로 잘라낸다.
+RL_MAX_DELTA = 0.05      # rad (2.9°) — 끝단 약 0.85cm
+
+
 def make_rl_corrector(rl_model, verbose=True):
     """목표 좌표 (x,y,z) → 관절 보정 Δq 를 돌려주는 함수를 만든다.
 
@@ -72,9 +83,14 @@ def make_rl_corrector(rl_model, verbose=True):
                       -TAU_OBS_LIMIT, TAU_OBS_LIMIT)
         obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
                         tau[0], tau[1], tau[2]], dtype=np.float32)
-        delta, _ = rl_model.predict(obs, deterministic=True)
+        raw, _ = rl_model.predict(obs, deterministic=True)
+        delta = np.clip(raw, -RL_MAX_DELTA, RL_MAX_DELTA)
         if verbose:
-            print(f"    [RL 보정] Δq = {np.round(delta, 4)}")
+            if np.any(np.abs(raw) > RL_MAX_DELTA):
+                print(f"    [RL 보정] Δq = {np.round(delta, 4)} "
+                      f"(원래 {np.round(raw, 3)} → ±{RL_MAX_DELTA}로 잘림)")
+            else:
+                print(f"    [RL 보정] Δq = {np.round(delta, 4)}")
         return delta
 
     return corrector
@@ -181,12 +197,19 @@ def run_game(args, arm, detector, rl_model):
         print("[main] 그 FEN 은 유효한 국면이 아닙니다 "
               "(양쪽 킹이 하나씩 있어야 합니다)"); return
 
+    # RL 보정 — 목표마다 계산. 정렬과 실행이 같은 것을 써야 자세가 일치한다.
+    corrector = make_rl_corrector(rl_model) if rl_model else None
+
     # 카메라 폐루프 정렬 콜백 — 하강 직전마다 마커를 보고 위치를 보정
     aligner = None
     if detector is not None:
         from hardware.visual_align import align_over_square
         def aligner(col, row, lift, suction):
-            align_over_square(arm, detector, col, row, lift, suction=suction)
+            # ⚠️ 반환값(보정 오프셋)을 반드시 그대로 돌려줄 것.
+            #    여기서 삼켜버리면 execute_move 가 보정을 못 받아
+            #    하강할 때 원래 칸 좌표로 되돌아간다(= 보정 무효).
+            return align_over_square(arm, detector, col, row, lift,
+                                     suction=suction, corrector=corrector)
 
     print("\n" + "="*50)
     print("체스 게임 시작! 당신=WHITE / 로봇=BLACK")
@@ -248,11 +271,7 @@ def run_game(args, arm, detector, rl_model):
             if not feasible:
                 print(f"  [경고] 토크 한계 초과: {np.round(tau, 3)} N·m")
 
-            # RL 보정 — 목표 좌표마다 새로 계산해야 한다.
-            # ⚠️ 예전에는 출발 칸 하나로 구한 값을 도착 칸·상승 지점까지
-            #    전부에 그대로 썼다. 보정량은 위치에 따라 달라지므로 틀린
-            #    사용이었다. 이제 함수를 넘겨 각 목표마다 계산한다.
-            correction = make_rl_corrector(rl_model) if rl_model else None
+            correction = corrector
 
             # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
             try:
@@ -304,9 +323,15 @@ def main():
                         help="시작 국면 (FEN). 기물이 32개가 안 될 때 실제로 "
                              "놓은 배치를 지정한다. "
                              "예: \"4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1\"")
-    parser.add_argument("--view", action="store_true",
+    parser.add_argument("--view", action="store_true", default=True,
                         help="카메라 화면을 계속 띄운다 (test_square의 show와 동일). "
-                             "인식 상태를 눈으로 보며 진행할 수 있다")
+                             "기본 켜짐 — 끄려면 --no-view")
+    parser.add_argument("--no-view", dest="view", action="store_false",
+                        help="카메라 화면을 띄우지 않는다")
+    parser.add_argument("--rl", action="store_true",
+                        help="RL 보정을 켠다 (기본 꺼짐). ⚠️ 카메라 폐루프 보정이 "
+                             "'실제로 잰 오차'를 고치는 반면 RL 보정은 재지 않은 "
+                             "값을 얹는 것이라, 둘을 같이 쓰면 오히려 어긋난다")
     parser.add_argument("--confirm", action="store_true",
                         help="집기/놓기 전에 칸 위에서 멈춰 사람 확인을 받는다 "
                              "(첫 실전 권장. 카메라 자동보정이 아니라 육안 확인)")
@@ -361,8 +386,12 @@ def main():
     else:
         arm.home()
 
-    # RL 모델 로드
-    rl_model = load_rl_model()
+    # RL 모델 로드 (--rl 을 줬을 때만)
+    if args.rl:
+        rl_model = load_rl_model()
+    else:
+        rl_model = None
+        print("[RL] 보정 꺼짐 (켜려면 --rl). 카메라 폐루프 보정만 사용합니다.")
 
     # 카메라 + 캘리브레이션
     detector = None

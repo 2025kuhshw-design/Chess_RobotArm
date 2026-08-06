@@ -50,7 +50,7 @@ def offset_xy(col: int, row: int, dcol: float, drow: float) -> tuple:
 def align_over_square(arm, detector, col: int, row: int, lift: float,
                       tol=ALIGN_TOL_CELLS, max_iter=ALIGN_MAX_ITER,
                       gain=ALIGN_GAIN, verbose=True, view_cb=None,
-                      suction: bool = False) -> bool:
+                      suction: bool = False, corrector=None) -> tuple:
     """목표 칸 위에서 카메라를 보며 흡착컵을 정렬한다.
 
     arm      : RealArm
@@ -60,6 +60,9 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
     view_cb  : 매 반복마다 호출되는 콜백(화면 갱신용). None이면 생략
     suction  : 기물을 들고 있는 중이면 True. ⚠️ 빠뜨리면 정렬 도중
                흡착이 풀려 기물을 떨어뜨린다.
+    corrector: f(x,y,z)->Δq (RL 보정). execute_move 가 쓰는 것과 **같은** 것을
+               넘겨야 한다. 여기서만 빼먹으면 정렬할 때와 하강할 때의 자세가
+               달라져, 애써 맞춘 보정이 어긋난다.
 
     반환: (dcol, drow) — 칸 단위 보정 오프셋.
       ⚠️ 호출한 쪽은 **이 값을 이후 하강에도 반드시 적용해야 한다.**
@@ -120,9 +123,14 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
         new_dcol = dcol - gain * err_col
         new_drow = drow - gain * err_row
         x, y = offset_xy(col, row, new_dcol, new_drow)
+        z = PIECE_Z + lift
         try:
-            arm.move(*inverse_kinematics(x, y, PIECE_Z + lift),
-                     suction=suction)
+            q = list(inverse_kinematics(x, y, z))
+            if corrector is not None:
+                d = corrector(x, y, z)
+                if d is not None:
+                    q = [q[i] + d[i] for i in range(3)]
+            arm.move(*q, suction=suction)
         except ValueError as e:
             if verbose:
                 print(f"    [정렬] 보정 위치가 도달 불가 — 이전 값 유지 ({e})")
