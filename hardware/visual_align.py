@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                              CELL_SIZE, PIECE_Z)
 
-# 허용 오차 (칸 단위). 0.15칸 ≈ 4.4mm — 흡착컵이 기물을 잡기에 충분.
-ALIGN_TOL_CELLS = 0.15
+# 허용 오차 (칸 단위). 0.0687칸 ≈ 2.0mm.
+ALIGN_TOL_CELLS = 0.0687
 # 최대 반복 횟수. 유격 때문에 완전히 수렴하지 않을 수 있으므로 상한을 둔다.
 ALIGN_MAX_ITER = 4
 # 보정 이득. 1.0이면 측정 오차만큼 그대로 되돌린다. 진동하면 0.6~0.8로 낮춘다.
