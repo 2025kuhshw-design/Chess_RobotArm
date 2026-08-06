@@ -906,14 +906,25 @@ class ChessBoardDetector:
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.3, (200,200,200), 1)
 
             # 흡착컵 마커 표시 (색 범위 튜닝용)
+            self._last_marker_px = None
+            self._last_marker_cnt = None
             mk = self.find_marker(frame)
             if mk is not None:
-                gx, gy = chess_to_grid(int(round(mk[0])), int(round(mk[1])))
-                # 연속 좌표를 다시 픽셀로 — 표시용이므로 근사로 충분
-                cv2.putText(top, f"MARK {chr(97+int(round(mk[0])))}{int(round(mk[1]))+1}",
-                            (5, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                cv2.circle(top, (gx*CELL_SIZE_PX + CELL_SIZE_PX//2,
-                                 gy*CELL_SIZE_PX + CELL_SIZE_PX//2), 8, (0, 0, 255), 2)
+                # ⚠️ 칸 중앙이 아니라 **실제로 잡힌 픽셀 위치**에 그린다.
+                px_py = getattr(self, "_last_marker_px", None)
+                if px_py is not None:
+                    px, py = int(round(px_py[0])), int(round(px_py[1]))
+                    cnt = getattr(self, "_last_marker_cnt", None)
+                    if cnt is not None:            # 잡힌 덩어리 윤곽
+                        cv2.drawContours(top, [cnt], -1, (0, 140, 255), 1)
+                    cv2.circle(top, (px, py), 7, (0, 0, 255), 2)
+                    cv2.line(top, (px-11, py), (px+11, py), (0, 0, 255), 1)
+                    cv2.line(top, (px, py-11), (px, py+11), (0, 0, 255), 1)
+                # 소수점까지 보여준다 — 칸 안 어디쯤인지 알 수 있게
+                cv2.putText(top,
+                            f"MARK {chr(97+int(round(mk[0])))}{int(round(mk[1]))+1}"
+                            f"  ({mk[0]:.2f},{mk[1]:.2f})",
+                            (5, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
             else:
                 cv2.putText(top, "MARK: not found", (5, 34),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
@@ -980,6 +991,11 @@ class ChessBoardDetector:
         if M["m00"] == 0:
             return None
         px, py = M["m10"] / M["m00"], M["m01"] / M["m00"]
+        # 화면에 '진짜 잡힌 자리'를 그리려고 픽셀 좌표도 남긴다.
+        # (예전에는 칸 중앙에 원을 그려서, 마커가 칸 구석에 있어도 중앙에
+        #  있는 것처럼 보였다 — 디버깅할 때 오해를 부른다)
+        self._last_marker_px = (px, py)
+        self._last_marker_cnt = best
         c, r = grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
         # 마커가 보이는 위치 → 흡착컵의 실제 위치 (시차·오프셋 보정)
         return apply_marker_fit(c, r)
