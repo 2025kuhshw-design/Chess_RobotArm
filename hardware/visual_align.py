@@ -46,10 +46,12 @@ ALIGN_MAX_ERR_CELLS = 1.2
 #
 # 해결: **실제로 일할 높이에서 잰다.** 기물 윗면 바로 위까지 내려가서
 #       측정하고, 거기서 마지막 하강만 수직으로 한다.
-ALIGN_WORK_LIFT = 0.0035   # 기물 윗면에서 3.5mm 위(전체 높이 8mm) — 여기서 측정한다
+ALIGN_WORK_LIFT = 0.0105   # 기물 윗면에서 10.5mm 위(전체 높이 15mm) — 여기서 측정한다
+                           # ⚠️ 8mm는 흡착컵이 기물을 밀어내고 판 바닥에 닿았다(실측)
 # 보정하려고 옆으로 움직일 때 잠깐 올라갈 높이 (기물 위를 안전하게 넘어가려고).
-# 기물이 4~5mm 이므로 12mm면 충분히 넘는다. 낮을수록 빠르다.
-ALIGN_CLEAR_LIFT = 0.012
+# ⚠️ ALIGN_WORK_LIFT 보다 높아야 한다 — 안 그러면 옆으로 옮기는 동안
+#    오히려 측정 높이보다 낮게 내려가 기물에 부딪힌다.
+ALIGN_CLEAR_LIFT = 0.020   # 기물 윗면에서 20mm 위
 
 
 def offset_xy(col: int, row: int, dcol: float, drow: float) -> tuple:
