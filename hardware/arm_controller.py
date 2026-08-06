@@ -443,7 +443,11 @@ class RealArm:
             if aligner is None:
                 return
             try:
-                r = aligner(col, row, _safe_lift(col, row), suction)
+                # ⚠️ 안전높이(4cm)가 아니라 **일할 높이**를 넘긴다.
+                #    높은 데서 재면 시차 때문에 한 칸 가까이 밀린 위치를
+                #    '맞다'고 판단하고, 내려가는 순간 어긋난다.
+                from hardware.visual_align import ALIGN_WORK_LIFT
+                r = aligner(col, row, ALIGN_WORK_LIFT, suction)
                 if r is not None:
                     off[0], off[1] = float(r[0]), float(r[1])
             except Exception as e:

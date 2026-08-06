@@ -150,7 +150,8 @@ def main():
         ⚠️ 기물을 들고 있으면 suction=True — 안 넘기면 정렬 중 떨어뜨린다."""
         if detector is None:
             return
-        align_over_square(arm, det_src, sq[0], sq[1], _safe_lift(*sq),
+        from hardware.visual_align import ALIGN_WORK_LIFT
+        align_over_square(arm, det_src, sq[0], sq[1], ALIGN_WORK_LIFT,
                           view_cb=show_once, suction=suction)
         show_once()
 

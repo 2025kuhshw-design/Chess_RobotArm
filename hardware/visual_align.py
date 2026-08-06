@@ -34,6 +34,23 @@ ALIGN_GAIN = 0.8
 # 그 값을 믿고 움직이면 팔이 엉뚱한 곳으로 크게 이동해 위험하다.
 ALIGN_MAX_ERR_CELLS = 1.2
 
+# ─────────────────────────────────────────
+# 정렬 높이 — 이게 정확도를 좌우한다
+# ─────────────────────────────────────────
+# ⚠️ 카메라가 판을 정확히 수직으로 내려다보지 않으면, 판 위로 뜬 마커는
+#    투영될 때 밀려 보인다(시차). 밀림은 **높이에 비례**한다.
+#      흡착컵 4.5cm 높이 → 판 가장자리에서 약 25mm(0.9칸) 밀림
+#      흡착컵 0.65cm     → 약 3mm
+#    예전에는 안전높이(4cm)에서 정렬하고 그 뒤에 내려갔다. 그래서 정렬은
+#    "맞았다"고 하는데 내려가는 순간 한 칸 가까이 어긋났다(실제로 겪음).
+#
+# 해결: **실제로 일할 높이에서 잰다.** 기물 윗면 바로 위까지 내려가서
+#       측정하고, 거기서 마지막 하강만 수직으로 한다.
+ALIGN_WORK_LIFT = 0.002    # 기물 윗면에서 2mm 위 — 여기서 측정한다
+# 보정하려고 옆으로 움직일 때 잠깐 올라갈 높이 (기물 위를 안전하게 넘어가려고).
+# 기물이 4~5mm 이므로 12mm면 충분히 넘는다. 낮을수록 빠르다.
+ALIGN_CLEAR_LIFT = 0.012
+
 
 def offset_xy(col: int, row: int, dcol: float, drow: float) -> tuple:
     """칸 (col,row)의 좌표에 '칸 단위 오프셋'을 더한 월드 (x, y).
@@ -47,49 +64,78 @@ def offset_xy(col: int, row: int, dcol: float, drow: float) -> tuple:
     return (x - drow * CELL_SIZE, y + dcol * CELL_SIZE)
 
 
-def align_over_square(arm, detector, col: int, row: int, lift: float,
+def align_over_square(arm, detector, col: int, row: int,
+                      lift: float = ALIGN_WORK_LIFT,
                       tol=ALIGN_TOL_CELLS, max_iter=ALIGN_MAX_ITER,
                       gain=ALIGN_GAIN, verbose=True, view_cb=None,
-                      suction: bool = False, corrector=None) -> tuple:
+                      suction: bool = False, corrector=None,
+                      clear_lift: float = ALIGN_CLEAR_LIFT) -> tuple:
     """목표 칸 위에서 카메라를 보며 흡착컵을 정렬한다.
+
+    동작 (한 번 반복):
+        1. 측정 높이(lift)로 **수직 하강**
+        2. 마커를 보고 오차를 잰다
+        3. 허용치 안이면 끝 — 팔은 이미 그 높이에 있으므로 바로 눌러 내리면 된다
+        4. 아니면 clear_lift 로 올라가 옆으로 옮긴 뒤 1번으로
+
+    ⚠️ 왜 이렇게 하나:
+       · 측정을 **일할 높이에서** 해야 시차 밀림이 작다(위 상수 설명 참고).
+       · 수평 이동은 **기물을 넘을 높이에서** 해야 옆 기물을 밀지 않는다.
+       · 마지막 하강은 순수 수직이라, 그 사이 마커가 어떻게 보이든
+         흡착컵의 실제 xy 는 안 변한다.
 
     arm      : RealArm
     detector : ChessBoardDetector (find_marker 사용)
     col,row  : 목표 칸
-    lift     : 접근 높이 (m)
+    lift     : 측정 높이 (기물 윗면 기준, m)
+    clear_lift : 옆으로 옮길 때 올라갈 높이 (기물 윗면 기준, m)
     view_cb  : 매 반복마다 호출되는 콜백(화면 갱신용). None이면 생략
     suction  : 기물을 들고 있는 중이면 True. ⚠️ 빠뜨리면 정렬 도중
                흡착이 풀려 기물을 떨어뜨린다.
     corrector: f(x,y,z)->Δq (RL 보정). execute_move 가 쓰는 것과 **같은** 것을
-               넘겨야 한다. 여기서만 빼먹으면 정렬할 때와 하강할 때의 자세가
-               달라져, 애써 맞춘 보정이 어긋난다.
+               넘겨야 정렬할 때와 하강할 때의 자세가 어긋나지 않는다.
 
-    반환: (dcol, drow) — 칸 단위 보정 오프셋.
-      ⚠️ 호출한 쪽은 **이 값을 이후 하강에도 반드시 적용해야 한다.**
-         예전에는 bool만 돌려줬고, 하강할 때 IK를 원래 칸 좌표로 다시
-         계산했다. 그래서 정렬로 옮겨놓은 위치가 하강 직전에 도로
-         원위치로 돌아가, 카메라 보정이 사실상 아무 효과가 없었다.
-      정렬을 못 했으면 (0.0, 0.0) — 보정 없이 원래 칸으로 가면 된다.
+    반환: (dcol, drow) — 칸 단위 보정 오프셋. 호출한 쪽은 이후 하강에도
+          **반드시 이 값을 적용**해야 한다(안 그러면 보정이 통째로 사라진다).
+          끝났을 때 팔은 측정 높이에 있고, 그 자리에서 수직으로 내리면 된다.
     """
-    # 목표 칸에서 얼마나 옮겼는지 (칸 단위). 이 값을 호출부에 돌려준다.
+    import time
+    import hardware.arm_controller as ac
+
     dcol, drow = 0.0, 0.0
     last_err = None
 
+    def goto(dc, dr, z_lift):
+        """오프셋 (dc,dr) 위치의 z_lift 높이로 이동."""
+        x, y = offset_xy(col, row, dc, dr)
+        z = PIECE_Z + z_lift
+        q = list(inverse_kinematics(x, y, z))
+        if corrector is not None:
+            d = corrector(x, y, z)
+            if d is not None:
+                q = [q[i] + d[i] for i in range(3)]
+        arm.move(*q, suction=suction)
+
     for i in range(max_iter):
+        # ── 측정 높이로 하강 ──
+        try:
+            goto(dcol, drow, lift)
+        except ValueError as e:
+            if verbose:
+                print(f"    [정렬] 측정 높이 도달 불가 — 중단 ({e})")
+            return (dcol, drow)
+        time.sleep(ac.SETTLE_WAIT)
         if view_cb is not None:
             view_cb()
+
         mk = detector.find_marker()
         if mk is None:
             if verbose:
                 print("    [정렬] 마커를 못 찾음 → 보정 없이 진행")
-                print("      · --mode vision 창이 켜져 있으면 닫으세요 "
-                      "(카메라를 두 프로그램이 동시에 못 씁니다)")
                 print("      · 팔이 마커를 가리고 있지 않은지 확인")
-                print("      · 색 범위: vision/detect.py 의 MARKER_HSV_RANGES")
-                print("      · 마커 색을 다시 고르려면: python vision/pick_marker.py")
+                print("      · 마커 색: python vision/pick_marker.py")
             return (dcol, drow)
 
-        # 마커가 있는 곳 - 있어야 할 곳 = 오차 (칸 단위)
         err_col = mk[0] - col
         err_row = mk[1] - row
         err = math.hypot(err_col, err_row)
@@ -102,47 +148,42 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
                 print(f"    [정렬] 허용치({tol*CELL_SIZE*1000:.0f}mm) 안 — 완료")
             return (dcol, drow)
 
-        # 측정값이 비현실적으로 크면 오인식 — 움직이지 않고 중단
         if err > ALIGN_MAX_ERR_CELLS:
             if verbose:
                 print(f"    [정렬] 오차 {err*CELL_SIZE*1000:.0f}mm 는 너무 큽니다 "
                       f"(한도 {ALIGN_MAX_ERR_CELLS*CELL_SIZE*1000:.0f}mm)")
                 print("      → 흡착컵이 아닌 다른 물체를 마커로 잡은 것으로 보입니다.")
-                print("      → 보정하지 않고 진행합니다. 'show'로 무엇이 잡히는지"
-                      " 확인하고 마커 색/오프셋을 점검하세요.")
-            return (0.0, 0.0)      # 믿을 수 없는 측정 — 원래 칸으로
+                print("      → 보정하지 않고 진행합니다.")
+            return (dcol, drow)
 
-        # 발산 감지: 오차가 오히려 커지면 중단 (이득이 너무 큼)
         if last_err is not None and err > last_err * 1.2:
             if verbose:
                 print("    [정렬] 오차가 커짐 — 중단 (ALIGN_GAIN을 낮춰 보세요)")
             return (dcol, drow)
         last_err = err
 
-        # 오차만큼 목표를 반대로 옮긴다
         new_dcol = dcol - gain * err_col
         new_drow = drow - gain * err_row
-        x, y = offset_xy(col, row, new_dcol, new_drow)
-        z = PIECE_Z + lift
+
+        # ── 기물을 넘을 높이로 올라가서 옆으로 옮긴다 ──
+        # (측정 높이에서 바로 옆으로 가면 옆 칸 기물을 밀어버린다)
         try:
-            q = list(inverse_kinematics(x, y, z))
-            if corrector is not None:
-                d = corrector(x, y, z)
-                if d is not None:
-                    q = [q[i] + d[i] for i in range(3)]
-            arm.move(*q, suction=suction)
+            goto(dcol, drow, clear_lift)        # 제자리에서 상승
+            goto(new_dcol, new_drow, clear_lift)  # 그 높이에서 수평 이동
         except ValueError as e:
             if verbose:
                 print(f"    [정렬] 보정 위치가 도달 불가 — 이전 값 유지 ({e})")
+            goto(dcol, drow, lift)
             return (dcol, drow)
         dcol, drow = new_dcol, new_drow
-
-        import time
-        import hardware.arm_controller as ac
-        time.sleep(ac.SETTLE_WAIT)      # 흔들림이 멎은 뒤 다시 측정
         if view_cb is not None:
             view_cb()
 
+    # 반복을 다 썼으면 마지막 오프셋으로 측정 높이에 내려둔다
+    try:
+        goto(dcol, drow, lift)
+    except ValueError:
+        pass
     if verbose:
         print(f"    [정렬] {max_iter}회 반복 후에도 허용치 미달 — "
               f"현재 보정({dcol:+.2f}, {drow:+.2f}칸)으로 진행")

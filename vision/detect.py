@@ -118,6 +118,33 @@ MARKER_OFFSET_COL = 0.0
 MARKER_OFFSET_ROW = 0.0
 
 # ─────────────────────────────────────────
+# 시차(parallax) 보정 — 마커는 판 위로 떠 있다
+# ─────────────────────────────────────────
+# ⚠️ 카메라가 판을 정확히 수직으로 내려다보지 않으면, **판 위로 떠 있는**
+#    마커는 판 평면에 투영될 때 밀려 보인다. 흡착컵이 e7 바로 위에 있는데
+#    화면에는 e8 로 잡히는 식이다(실제로 겪음).
+#
+#    밀림 = h/(H-h) x (카메라 바로 아래 지점에서의 거리)
+#      h=마커 높이, H=카메라 높이. 예: H=40cm, h=4.5cm, 가장자리 20cm →
+#      약 0.87칸이 밀린다.
+#
+#    핵심은 이 밀림이 **위치에 비례해 선형으로 커진다**는 점이다. 그래서
+#    상수 오프셋 하나로는 못 고치고(그 칸에서만 맞음), 어파인 변환이 필요하다.
+#      실제칸 = A*측정칸 + B*측정랭크 + C
+#      실제랭크 = D*측정칸 + E*측정랭크 + F
+#    test_square 의 'markcal fit' 이 여러 칸에서 재서 이 6개를 구해준다.
+# [A,B,C, D,E,F] 또는 None(보정 안 함)
+MARKER_FIT = None
+
+
+def apply_marker_fit(col: float, row: float) -> tuple:
+    """마커가 보이는 위치 → 흡착컵의 실제 위치 (칸 단위)."""
+    if MARKER_FIT is None:
+        return (col - MARKER_OFFSET_COL, row - MARKER_OFFSET_ROW)
+    a, b, c, d, e, f = MARKER_FIT
+    return (a * col + b * row + c, d * col + e * row + f)
+
+# ─────────────────────────────────────────
 # 실측한 색 설정 (vision/colors.json)
 # ─────────────────────────────────────────
 # ⚠️ 색은 조명·카메라·기물마다 다르므로 **설치 환경마다 다른 값**이다.
@@ -138,7 +165,7 @@ def _as_ranges(v):
 def load_colors(path: str = None) -> bool:
     """colors.json 이 있으면 색 설정을 그 값으로 바꾼다. 반환: 로드했는가."""
     global MARKER_HSV_RANGES, PIECE_HSV_WHITE, PIECE_HSV_BLACK, PIECE_COLOR_MODE
-    global MARKER_OFFSET_COL, MARKER_OFFSET_ROW
+    global MARKER_OFFSET_COL, MARKER_OFFSET_ROW, MARKER_FIT
     path = path or COLORS_PATH
     if not os.path.exists(path):
         return False
@@ -158,11 +185,13 @@ def load_colors(path: str = None) -> bool:
         PIECE_COLOR_MODE = bool(d["color_mode"])
     if "marker_offset" in d:
         MARKER_OFFSET_COL, MARKER_OFFSET_ROW = (float(v) for v in d["marker_offset"])
+    if "marker_fit" in d:
+        MARKER_FIT = [float(v) for v in d["marker_fit"]] if d["marker_fit"] else None
     return True
 
 
 def save_colors(marker=None, white=None, black=None, color_mode=None,
-                marker_offset=None, path: str = None):
+                marker_offset=None, marker_fit=None, path: str = None):
     """colors.json 에 색 설정을 저장한다. None 인 항목은 기존 값을 유지."""
     path = path or COLORS_PATH
     d = {}
@@ -182,6 +211,8 @@ def save_colors(marker=None, white=None, black=None, color_mode=None,
         d["color_mode"] = bool(color_mode)
     if marker_offset is not None:
         d["marker_offset"] = [float(marker_offset[0]), float(marker_offset[1])]
+    if marker_fit is not None:
+        d["marker_fit"] = [float(v) for v in marker_fit] if marker_fit else None
     with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
     load_colors(path)          # 방금 저장한 값을 바로 반영
@@ -950,8 +981,8 @@ class ChessBoardDetector:
             return None
         px, py = M["m10"] / M["m00"], M["m01"] / M["m00"]
         c, r = grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
-        # 마커가 흡착컵 바로 위가 아니면 그 차이를 빼서 흡착컵 위치로 환산
-        return (c - MARKER_OFFSET_COL, r - MARKER_OFFSET_ROW)
+        # 마커가 보이는 위치 → 흡착컵의 실제 위치 (시차·오프셋 보정)
+        return apply_marker_fit(c, r)
 
     def close(self):
         if self.cap is not None:
