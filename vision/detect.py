@@ -571,6 +571,17 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 1: 현재 보드 상태 반환
     # ─────────────────────────────────────────
+    def detection_mode(self) -> str:
+        """지금 실제로 쓰는 판정 방식 이름. 화면 표시가 실제와 어긋나지 않게
+        get_board_state 의 분기와 **같은 조건**을 쓴다."""
+        if PIECE_HSV_WHITE and PIECE_HSV_BLACK:
+            return "기물 윗면 색 (양쪽 등록)"
+        if PIECE_COLOR_MODE and (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
+            return "기물 윗면 색 (한쪽만 등록)"
+        if self._ref is not None:
+            return "빈 판 기준 영상"
+        return "밝기 (기준 영상·색 모두 없음)"
+
     def get_board_state(self, frame=None, expect=None) -> list:
         """
         현재 프레임 캡처 → 8×8 보드 상태 반환.

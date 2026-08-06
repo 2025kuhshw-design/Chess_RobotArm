@@ -116,13 +116,14 @@ def _startup_vision_check(detector, board):
 
     obs = detector.get_board_state(expect=expect)
     n = sum(obs[r][c] == expect[r][c] for r in range(8) for c in range(8))
-    mode = "빈 판 기준 영상" if getattr(detector, "_ref", None) is not None else "밝기"
     print(f"[카메라] 시작 배치 판독: 64칸 중 {n}칸 일치 "
-          f"(ROBOT_SIDE=\"{vd.ROBOT_SIDE}\", 방식={mode})")
+          f"(ROBOT_SIDE=\"{vd.ROBOT_SIDE}\", 방식={detector.detection_mode()})")
     if n >= 60:
         return
-    print("  ⚠️ 판독이 시작 배치와 많이 다릅니다. 지금 판이 시작 배치가 아니면")
-    print("     무시해도 됩니다. 시작 배치가 맞다면 아래를 확인하세요:")
+    print("  ⚠️ 판독이 지정한 시작 배치와 많이 다릅니다.")
+    print("     ① 판에 실제로 놓은 배치와 --fen 이 같은지 먼저 확인하세요.")
+    print("        (기물 32개를 표준 배치로 놓았다면 --fen 을 아예 빼야 합니다)")
+    print("     ② 배치가 맞는데도 다르면 인식 문제입니다:")
     print(format_state(obs, expect))
     print("     python vision/check_board.py --camera <번호> --all-sides")
 

@@ -93,15 +93,19 @@ def main():
             return
 
         obs = det.get_board_state(expect=expect)
-        mode = "빈 판 기준 영상" if det._ref is not None else "밝기 (기준 영상 없음)"
-        print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\"   판정 방식: {mode}")
+        print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\"   판정 방식: {det.detection_mode()}")
         print("\n카메라가 읽은 배치 (대문자=시작배치와 다른 칸):")
         print(format_state(obs, expect))
         print(f"\n시작 배치와 {agreement(obs, expect)}/64 칸 일치")
         print()
         print(det.explain_board_state())
         print("\n판단 요령:")
-        if det._ref is not None:
+        if "색" in det.detection_mode():
+            print("  · 기물 있는 칸의 비율이 낮다 → detect.py 의 "
+                  "PIECE_COLOR_MIN_FRAC 을 낮춘다")
+            print("  · 실제로 놓은 배치와 --fen 이 같은지 먼저 확인할 것 "
+                  "(32개면 --fen 을 아예 빼면 된다)")
+        elif det._ref is not None:
             print("  · 기물 있는 칸의 비율이 낮다 → --frac 0.10 처럼 낮춘다")
             print("  · 빈 칸이 기물로 잡힌다      → --frac 0.25 처럼 올린다")
         else:
