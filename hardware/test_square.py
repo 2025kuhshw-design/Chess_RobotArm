@@ -92,6 +92,7 @@ def main():
         except Exception as e:
             print(f"  [카메라] 초기화 실패: {e} → 보정 없이 진행")
 
+    markcal_pts = []  # markcal add 로 모은 (마커col, 마커row, 실제col, 실제row)
     cur = None       # 현재 대상 칸 (col,row)
     holding = False  # 기물을 흡착해 들고 있는 중인가
 
@@ -183,7 +184,7 @@ def main():
     print("        probe s3 180 200 그 관절의 실제 기계 한계를 5도씩 찾아본다")
     if detector is not None:
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
-              "markcal <칸> 오프셋측정")
+              "markcal add/fit 시차보정")
         print("              board  기물 인식·판 방향 점검 (시작 배치와 대조)")
         print("              refcap ⭐ 빈 판 기준 영상 찍기 (기물 다 치우고)")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
@@ -373,29 +374,100 @@ def main():
                     cur = sq
                     print(f"  {p[0]} 위 안전높이로 이동")
                     goto(*sq, lift=True, suction=holding)
-                elif p[0] == "markcal" and len(p) == 2:
-                    # 흡착컵을 그 칸 중심에 정확히 맞춰 둔 상태에서 실행.
-                    # 마커가 보이는 위치와의 차이를 오프셋으로 저장한다.
-                    sq = parse_square(p[1])
-                    if not sq:
-                        print("  칸 이름 오류 (예: markcal e5)"); continue
+                elif p[0] == "markcal":
+                    # ── 마커 위치 → 흡착컵 실제 위치 관계를 재는 명령 ──
+                    # ⚠️ 왜 필요한가: 정렬은 '마커'를 칸 중심에 놓는다. 그런데
+                    #    카메라가 완전한 수직이 아니면 마커는 시차로 밀려 보여서,
+                    #    마커를 중심에 맞추면 **흡착컵은 반대편으로 밀린다**.
+                    #    25mm 높이·판 가장자리에서 10mm 넘게 벌어진다.
+                    #    이 밀림은 판 위치에 따라 선형으로 커지므로 상수 하나로는
+                    #    못 잡는다 → 여러 칸에서 재서 어파인 변환을 구한다.
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
                     import vision.detect as vd
-                    vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
-                    mk = det_src.find_marker()
-                    if mk is None:
-                        print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인"); continue
-                    oc, orow = mk[0] - sq[0], mk[1] - sq[1]
-                    print(f"  마커 오프셋 = 파일 {oc:+.2f}칸, 랭크 {orow:+.2f}칸 "
-                          f"({math.hypot(oc,orow)*2.91:.1f}mm)")
-                    # colors.json 에 저장 — detect.py 를 고치면 git pull 이 충돌한다
-                    vd.save_colors(marker_offset=(oc, orow))
-                    print(f"  저장 완료 → {vd.COLORS_PATH} (바로 적용됨)")
-                    if abs(oc) > 0.4 or abs(orow) > 0.4:
-                        print("  ⚠️ 오프셋이 반 칸을 넘습니다. 마커가 흡착컵에서"
-                              " 많이 떨어져 있거나,")
-                        print("     흡착컵이 그 칸 중심에 안 맞춰져 있을 수 있습니다.")
+                    sub = p[1] if len(p) >= 2 else "help"
+
+                    if sub == "add" and len(p) == 3:
+                        sq = parse_square(p[2])
+                        if not sq:
+                            print("  칸 이름 오류 (예: markcal add e5)"); continue
+                        # 보정을 끈 '날것' 측정값을 모은다
+                        sf, so = vd.MARKER_FIT, (vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW)
+                        vd.MARKER_FIT = None
+                        vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
+                        mk = det_src.find_marker()
+                        vd.MARKER_FIT = sf
+                        vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW = so
+                        if mk is None:
+                            print("  마커를 못 찾음 — 색 범위 확인"); continue
+                        markcal_pts.append((mk[0], mk[1], float(sq[0]), float(sq[1])))
+                        d = math.hypot(mk[0]-sq[0], mk[1]-sq[1]) * 29.125
+                        print(f"  기록 {len(markcal_pts)}번째: {p[2]} — "
+                              f"마커 ({mk[0]:.2f},{mk[1]:.2f}), 차이 {d:.1f}mm")
+                        if len(markcal_pts) < 3:
+                            print(f"  → {3-len(markcal_pts)}개 더 필요합니다 "
+                                  "(판의 서로 다른 구석에서 재세요)")
+                        else:
+                            print("  → 'markcal fit' 으로 계산·저장")
+
+                    elif sub == "fit":
+                        if len(markcal_pts) < 3:
+                            print(f"  점이 {len(markcal_pts)}개뿐입니다. "
+                                  "3개 이상 필요 (markcal add <칸>)"); continue
+                        import numpy as np
+                        A = np.array([[m[0], m[1], 1.0] for m in markcal_pts])
+                        tc = np.array([m[2] for m in markcal_pts])
+                        tr = np.array([m[3] for m in markcal_pts])
+                        try:
+                            cc, *_ = np.linalg.lstsq(A, tc, rcond=None)
+                            cr, *_ = np.linalg.lstsq(A, tr, rcond=None)
+                        except Exception as e:
+                            print(f"  계산 실패: {e}"); continue
+                        fit = [float(v) for v in (*cc, *cr)]
+                        # 잔차 확인 — 점이 한 줄로 늘어서 있으면 값이 이상해진다
+                        res = []
+                        for mc, mr, ttc, ttr in markcal_pts:
+                            pc = fit[0]*mc + fit[1]*mr + fit[2]
+                            pr = fit[3]*mc + fit[4]*mr + fit[5]
+                            res.append(math.hypot(pc-ttc, pr-ttr) * 29.125)
+                        print(f"  {len(markcal_pts)}점으로 계산: 잔차 평균 "
+                              f"{sum(res)/len(res):.1f}mm, 최대 {max(res):.1f}mm")
+                        if max(res) > 8:
+                            print("  ⚠️ 잔차가 큽니다. 흡착컵을 칸 중심에 정확히"
+                                  " 맞췄는지, 점들이 한 줄로 늘어서 있지 않은지 확인")
+                        vd.save_colors(marker_fit=fit, marker_offset=(0.0, 0.0))
+                        print(f"  저장 완료 → {vd.COLORS_PATH} (바로 적용됨)")
+                        print("  확인: 'mark' 로 흡착컵 실제 위치와 맞는지 보세요")
+
+                    elif sub == "clear":
+                        markcal_pts.clear()
+                        vd.save_colors(marker_fit=None, marker_offset=(0.0, 0.0))
+                        print("  기록·저장된 보정을 모두 지웠습니다")
+
+                    elif len(p) == 2 and parse_square(p[1]):
+                        # 예전 방식: 한 칸에서 상수 오프셋만 (급할 때만)
+                        sq = parse_square(p[1])
+                        sf = vd.MARKER_FIT
+                        vd.MARKER_FIT = None
+                        vd.MARKER_OFFSET_COL = vd.MARKER_OFFSET_ROW = 0.0
+                        mk = det_src.find_marker()
+                        vd.MARKER_FIT = sf
+                        if mk is None:
+                            print("  마커를 못 찾음"); continue
+                        oc, orow = mk[0] - sq[0], mk[1] - sq[1]
+                        print(f"  마커 오프셋 = 파일 {oc:+.2f}칸, 랭크 {orow:+.2f}칸 "
+                              f"({math.hypot(oc,orow)*29.125:.1f}mm)")
+                        vd.save_colors(marker_offset=(oc, orow), marker_fit=None)
+                        print(f"  저장 완료 → {vd.COLORS_PATH}")
+                        print("  ※ 이건 그 칸에서만 정확합니다. 판 전체를 맞추려면")
+                        print("    'markcal add' 를 3칸 이상에서 한 뒤 'markcal fit'")
+                    else:
+                        print("  markcal add <칸>   흡착컵을 그 칸 중심에 맞춘 뒤 기록")
+                        print("  markcal fit        3점 이상 모이면 계산·저장")
+                        print("  markcal clear      기록·보정 초기화")
+                        print("  markcal <칸>       한 칸만 보는 간이 방식")
+                        print(f"  (현재 기록 {len(markcal_pts)}점)")
+
                 elif p[0] in ("show", "view"):
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
