@@ -138,6 +138,7 @@ def _as_ranges(v):
 def load_colors(path: str = None) -> bool:
     """colors.json 이 있으면 색 설정을 그 값으로 바꾼다. 반환: 로드했는가."""
     global MARKER_HSV_RANGES, PIECE_HSV_WHITE, PIECE_HSV_BLACK, PIECE_COLOR_MODE
+    global MARKER_OFFSET_COL, MARKER_OFFSET_ROW
     path = path or COLORS_PATH
     if not os.path.exists(path):
         return False
@@ -155,11 +156,13 @@ def load_colors(path: str = None) -> bool:
         PIECE_HSV_BLACK = _as_ranges(d["black"] or [])
     if "color_mode" in d:
         PIECE_COLOR_MODE = bool(d["color_mode"])
+    if "marker_offset" in d:
+        MARKER_OFFSET_COL, MARKER_OFFSET_ROW = (float(v) for v in d["marker_offset"])
     return True
 
 
 def save_colors(marker=None, white=None, black=None, color_mode=None,
-                path: str = None):
+                marker_offset=None, path: str = None):
     """colors.json 에 색 설정을 저장한다. None 인 항목은 기존 값을 유지."""
     path = path or COLORS_PATH
     d = {}
@@ -177,6 +180,8 @@ def save_colors(marker=None, white=None, black=None, color_mode=None,
         d["black"] = [[list(lo), list(hi)] for lo, hi in black]
     if color_mode is not None:
         d["color_mode"] = bool(color_mode)
+    if marker_offset is not None:
+        d["marker_offset"] = [float(marker_offset[0]), float(marker_offset[1])]
     with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
     load_colors(path)          # 방금 저장한 값을 바로 반영

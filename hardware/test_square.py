@@ -386,12 +386,15 @@ def main():
                     if mk is None:
                         print("  마커를 못 찾음 — MARKER_HSV_RANGES 확인"); continue
                     oc, orow = mk[0] - sq[0], mk[1] - sq[1]
-                    vd.MARKER_OFFSET_COL, vd.MARKER_OFFSET_ROW = oc, orow
                     print(f"  마커 오프셋 = 파일 {oc:+.2f}칸, 랭크 {orow:+.2f}칸 "
                           f"({math.hypot(oc,orow)*2.91:.1f}mm)")
-                    print(f"  영구 적용하려면 vision/detect.py 에:")
-                    print(f"    MARKER_OFFSET_COL = {oc:.3f}")
-                    print(f"    MARKER_OFFSET_ROW = {orow:.3f}")
+                    # colors.json 에 저장 — detect.py 를 고치면 git pull 이 충돌한다
+                    vd.save_colors(marker_offset=(oc, orow))
+                    print(f"  저장 완료 → {vd.COLORS_PATH} (바로 적용됨)")
+                    if abs(oc) > 0.4 or abs(orow) > 0.4:
+                        print("  ⚠️ 오프셋이 반 칸을 넘습니다. 마커가 흡착컵에서"
+                              " 많이 떨어져 있거나,")
+                        print("     흡착컵이 그 칸 중심에 안 맞춰져 있을 수 있습니다.")
                 elif p[0] in ("show", "view"):
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
