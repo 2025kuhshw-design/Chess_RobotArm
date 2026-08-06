@@ -125,7 +125,7 @@ PARK_POSE = (85, 140, 180)   # (베이스 정면, 어깨, 팔꿈치) — Z자
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
-                              safe_approach_xyz,
+                              safe_approach_xyz, CELL_SIZE,
                               L1_DEFAULT, L2_DEFAULT, L3_DEFAULT, PIECE_Z)
 
 
@@ -431,11 +431,20 @@ class RealArm:
         aligner=f(col, row, lift, suction) 를 주면 하강 직전마다 호출해
             카메라 폐루프 보정을 한다. None이면 보정 없이 진행.
         """
+        # 카메라 정렬이 옮겨놓은 양(칸 단위). 뒤이은 하강·흡착에도 그대로
+        # 적용해야 한다. ⚠️ 예전에는 이 값을 버리고 하강할 때 IK를 원래 칸
+        # 좌표로 다시 계산했다. 그래서 정렬로 맞춰둔 위치가 하강 직전에
+        # 도로 원위치로 돌아가, 카메라 보정이 사실상 무효였다.
+        off = [0.0, 0.0]
+
         def _align(col, row, suction=False):
+            off[0] = off[1] = 0.0
             if aligner is None:
                 return
             try:
-                aligner(col, row, _safe_lift(col, row), suction)
+                r = aligner(col, row, _safe_lift(col, row), suction)
+                if r is not None:
+                    off[0], off[1] = float(r[0]), float(r[1])
             except Exception as e:
                 print(f"    [정렬] 실패 — 보정 없이 진행 ({e})")
         def _ask(msg):
@@ -445,17 +454,36 @@ class RealArm:
             return ans not in ("x", "q", "n")
         # ⚠️ suction 인자를 반드시 넘길 것. 기본값(False)으로 두면 기물을
         #    든 채 이동하는 구간에서 흡착이 풀려 기물을 떨어뜨린다.
-        def _move_to(col, row, lift=False, suction=False):
+        def _move_to(col, row, lift=False, suction=False, use_offset=True):
             if lift:
                 x, y, z = safe_approach_xyz(col, row, _safe_lift(col, row))
             else:
                 x, y, z = touch_xyz(col, row)   # 흡착컵이 눌리도록 조금 더 하강
+            if use_offset and (off[0] or off[1]):
+                # 정렬이 옮긴 만큼 그대로 반영 (chess_square_to_xyz 규약과 동일)
+                x -= off[1] * CELL_SIZE
+                y += off[0] * CELL_SIZE
             q1, q2, q3 = inverse_kinematics(x, y, z)
-            if rl_correction is not None:
-                q1 += rl_correction[0]
-                q2 += rl_correction[1]
-                q3 += rl_correction[2]
+            d = _correction(x, y, z)
+            if d is not None:
+                q1 += d[0]; q2 += d[1]; q3 += d[2]
             self.move(q1, q2, q3, suction=suction)
+
+        def _correction(x, y, z):
+            """RL 보정값. 호출 가능하면 목표마다 새로 계산한다.
+
+            ⚠️ 예전에는 출발 칸 하나로 구한 값을 도착 칸에도 그대로 썼다.
+               보정량은 위치마다 다르므로 그건 틀린 사용이다.
+            """
+            if rl_correction is None:
+                return None
+            if callable(rl_correction):
+                try:
+                    return rl_correction(x, y, z)
+                except Exception as e:
+                    print(f"    [RL] 보정 계산 실패 — 무시 ({e})")
+                    return None
+            return rl_correction
 
         fc, fr = from_sq
         tc, tr = to_sq
@@ -469,10 +497,12 @@ class RealArm:
             _align(tc, tr)                   # 카메라 보정 후 하강
             _move_to(tc, tr, lift=False)
             time.sleep(SETTLE_WAIT)
-            self.move(*inverse_kinematics(*touch_xyz(tc, tr)), suction=True)
+            # 같은 자세 그대로 흡착만 켠다 (위치를 다시 계산하면 보정이 풀린다)
+            _move_to(tc, tr, lift=False, suction=True)
             time.sleep(SUCTION_ON_WAIT)
             _move_to(tc, tr, lift=True, suction=True)     # 든 채로 상승
             # 잡은 기물은 보드 밖 캡처 구역에 내려놓음 (항상 도달 가능한 위치)
+            off[0] = off[1] = 0.0        # 보드 밖 — 칸 정렬 오프셋은 무의미
             x_out, y_out, z_out = capture_slot_xyz(self._captured_count)
             self._captured_count += 1
             lift_out = _safe_lift_xy(x_out, y_out)
@@ -494,13 +524,15 @@ class RealArm:
         # 2) 출발 칸 하강
         _move_to(fc, fr, lift=False)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 흡착
-        # 3) 흡착기 ON
-        q1, q2, q3 = inverse_kinematics(*touch_xyz(fc, fr))
-        self.move(q1, q2, q3, suction=True)
+        # 3) 흡착기 ON — 같은 자세 그대로. 위치를 다시 계산하면 정렬·RL
+        #    보정이 풀려 흡착 직전에 팔이 그만큼 튄다.
+        _move_to(fc, fr, lift=False, suction=True)
         time.sleep(SUCTION_ON_WAIT)
         # 4) 안전 높이로 상승 (기물 든 상태 유지)
         _move_to(fc, fr, lift=True, suction=True)
         # 5) 도착 칸 위 안전 높이 (기물 든 상태 유지)
+        #    출발 칸의 정렬 오프셋을 도착 칸에 쓰면 안 되므로 먼저 지운다.
+        off[0] = off[1] = 0.0
         _move_to(tc, tr, lift=True, suction=True)
         time.sleep(SETTLE_WAIT)
         _align(tc, tr, suction=True)     # 기물 든 채로 보정 (흡착 유지)
@@ -508,9 +540,8 @@ class RealArm:
         # 6) 도착 칸 하강 (기물 든 상태 유지)
         _move_to(tc, tr, lift=False, suction=True)
         time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 놓기
-        # 7) 흡착기 OFF — 여기서 처음으로 놓는다
-        q1, q2, q3 = inverse_kinematics(*touch_xyz(tc, tr))
-        self.move(q1, q2, q3, suction=False)
+        # 7) 흡착기 OFF — 여기서 처음으로 놓는다 (자세는 그대로)
+        _move_to(tc, tr, lift=False, suction=False)
         time.sleep(SUCTION_OFF_WAIT)
         # 8) 안전 높이로 상승
         _move_to(tc, tr, lift=True)

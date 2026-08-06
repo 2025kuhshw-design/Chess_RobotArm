@@ -52,7 +52,7 @@ USB/
 | 파일 | 출처 | 필수? |
 |---|---|---|
 | `stockfish .exe` | stockfishchess.org | ✅ 필수 |
-| `stage2_final.zip` | 구글드라이브 `MyDrive/chess_robot/correction_model/` | ❌ **현재 못 씀** — 재학습 필요(9-A-2) |
+| `stage2_final.zip` + `stage2_vecnorm.pkl` | 구글드라이브 `MyDrive/chess_robot/correction_model/` | ⭕ 재학습 완료본 사용 |
 | `calibration.json` | **가져가지 말 것** | ❌ 현장에서 새로 생성 |
 
 > 오프라인 대비: 집에서 `pip download -r requirements.txt -d USB\offline_backup\wheels`
@@ -681,6 +681,36 @@ python vision/check_board.py --camera 1 --thresh 12    # 임계값 바꿔 시험
 | 빈 칸이 기물로 읽힘 | `OCC_DIFF_THRESH` 를 올린다 (`--thresh 25`) |
 | 기물은 잡히는데 엉뚱한 칸 | `--all-sides` 로 `ROBOT_SIDE` 확인 |
 | 흑백이 뒤바뀜 | 판이 180° 돌아 있는지 확인 (`--all-sides`) |
+
+### 마커가 안 잡힐 때 ⭐
+
+`mark` 가 계속 "못 찾음"이면 색 범위(`MARKER_HSV_RANGES`)가 실제 마커 색과
+안 맞는 것이다. 숫자를 눈으로 추측하지 말고 **화면에서 직접 재라**:
+
+```bash
+# 1) 먼저 팔을 체스판 위로 (마커가 카메라에 보이게)
+python hardware/test_square.py --port COM5
+square> e5
+square> q          # ⚠️ 반드시 종료 — 카메라를 두 프로그램이 동시에 못 쓴다
+
+# 2) 색 고르기
+python vision/pick_marker.py --camera 1
+```
+
+창에서 **마커를 클릭**하면 그 픽셀의 HSV를 재서 범위를 만든다.
+잡힌 영역이 초록으로 칠해지므로 **마커만 초록**이 되도록 몇 번 더 클릭한다.
+`s` 를 누르면 `vision/detect.py` 에 바로 저장된다.
+
+| 화면 표시 | 뜻 |
+|---|---|
+| `blobs=1 max=350px (OK)` | 성공 — 마커 하나만 알맞은 크기로 잡힘 |
+| `(BAD)` | 덩어리가 너무 크거나 작다 → 다른 곳이 같이 잡힌 것 |
+| `blobs=0` | 아무것도 안 잡힘 → 마커를 다시 클릭 |
+
+- 팔이 체스판 밖에 있으면 `--raw` 로 원본 화면에서 고를 수 있다
+- `r` 초기화, `q` 저장 없이 종료
+
+---
 
 `--thresh` 로 좋은 값을 찾았으면 `vision/detect.py` 의 `OCC_DIFF_THRESH` 에 적는다.
 

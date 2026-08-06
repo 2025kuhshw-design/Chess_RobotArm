@@ -20,7 +20,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
-                             CELL_SIZE, BOARD_ORIGIN_X, BOARD_ORIGIN_Y, PIECE_Z)
+                             CELL_SIZE, PIECE_Z)
 
 # 허용 오차 (칸 단위). 0.15칸 ≈ 4.4mm — 흡착컵이 기물을 잡기에 충분.
 ALIGN_TOL_CELLS = 0.15
@@ -35,12 +35,16 @@ ALIGN_GAIN = 0.8
 ALIGN_MAX_ERR_CELLS = 1.2
 
 
-def colrow_to_xy(col_f: float, row_f: float) -> tuple:
-    """연속 체스 좌표 → 월드 (x, y). chess_square_to_xyz의 실수 버전.
-    ⚠️ 실측 보정(board_fit)은 적용하지 않는다 — 시각 피드백이 그 역할을 대신한다."""
-    x = BOARD_ORIGIN_X + (7 - row_f) * CELL_SIZE + CELL_SIZE / 2
-    y = BOARD_ORIGIN_Y + col_f * CELL_SIZE + CELL_SIZE / 2
-    return (x, y)
+def offset_xy(col: int, row: int, dcol: float, drow: float) -> tuple:
+    """칸 (col,row)의 좌표에 '칸 단위 오프셋'을 더한 월드 (x, y).
+
+    chess_square_to_xyz 를 기준으로 삼고 거기에 델타만 얹는다.
+      x = ... + (7-row)*CELL  →  drow 만큼 늘면 x 는 그만큼 준다
+      y = ... + col*CELL      →  dcol 만큼 늘면 y 도 그만큼 는다
+    이렇게 해야 실측 보정(board_fit)이 적용된 기준점 위에서 보정이 쌓인다.
+    """
+    x, y, _ = chess_square_to_xyz(col, row)
+    return (x - drow * CELL_SIZE, y + dcol * CELL_SIZE)
 
 
 def align_over_square(arm, detector, col: int, row: int, lift: float,
@@ -56,10 +60,16 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
     view_cb  : 매 반복마다 호출되는 콜백(화면 갱신용). None이면 생략
     suction  : 기물을 들고 있는 중이면 True. ⚠️ 빠뜨리면 정렬 도중
                흡착이 풀려 기물을 떨어뜨린다.
-    반환     : True=허용치 안으로 수렴, False=마커 미검출 또는 미수렴
+
+    반환: (dcol, drow) — 칸 단위 보정 오프셋.
+      ⚠️ 호출한 쪽은 **이 값을 이후 하강에도 반드시 적용해야 한다.**
+         예전에는 bool만 돌려줬고, 하강할 때 IK를 원래 칸 좌표로 다시
+         계산했다. 그래서 정렬로 옮겨놓은 위치가 하강 직전에 도로
+         원위치로 돌아가, 카메라 보정이 사실상 아무 효과가 없었다.
+      정렬을 못 했으면 (0.0, 0.0) — 보정 없이 원래 칸으로 가면 된다.
     """
-    # 현재 명령 중인 목표 (연속 좌표). 보정하며 이 값을 조금씩 옮긴다.
-    tgt_col, tgt_row = float(col), float(row)
+    # 목표 칸에서 얼마나 옮겼는지 (칸 단위). 이 값을 호출부에 돌려준다.
+    dcol, drow = 0.0, 0.0
     last_err = None
 
     for i in range(max_iter):
@@ -73,7 +83,8 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
                       "(카메라를 두 프로그램이 동시에 못 씁니다)")
                 print("      · 팔이 마커를 가리고 있지 않은지 확인")
                 print("      · 색 범위: vision/detect.py 의 MARKER_HSV_RANGES")
-            return False
+                print("      · 마커 색을 다시 고르려면: python vision/pick_marker.py")
+            return (dcol, drow)
 
         # 마커가 있는 곳 - 있어야 할 곳 = 오차 (칸 단위)
         err_col = mk[0] - col
@@ -86,7 +97,7 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
         if err <= tol:
             if verbose:
                 print(f"    [정렬] 허용치({tol*CELL_SIZE*1000:.0f}mm) 안 — 완료")
-            return True
+            return (dcol, drow)
 
         # 측정값이 비현실적으로 크면 오인식 — 움직이지 않고 중단
         if err > ALIGN_MAX_ERR_CELLS:
@@ -96,26 +107,27 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
                 print("      → 흡착컵이 아닌 다른 물체를 마커로 잡은 것으로 보입니다.")
                 print("      → 보정하지 않고 진행합니다. 'show'로 무엇이 잡히는지"
                       " 확인하고 마커 색/오프셋을 점검하세요.")
-            return False
+            return (0.0, 0.0)      # 믿을 수 없는 측정 — 원래 칸으로
 
         # 발산 감지: 오차가 오히려 커지면 중단 (이득이 너무 큼)
         if last_err is not None and err > last_err * 1.2:
             if verbose:
                 print("    [정렬] 오차가 커짐 — 중단 (ALIGN_GAIN을 낮춰 보세요)")
-            return False
+            return (dcol, drow)
         last_err = err
 
         # 오차만큼 목표를 반대로 옮긴다
-        tgt_col -= gain * err_col
-        tgt_row -= gain * err_row
-        x, y = colrow_to_xy(tgt_col, tgt_row)
+        new_dcol = dcol - gain * err_col
+        new_drow = drow - gain * err_row
+        x, y = offset_xy(col, row, new_dcol, new_drow)
         try:
             arm.move(*inverse_kinematics(x, y, PIECE_Z + lift),
                      suction=suction)
         except ValueError as e:
             if verbose:
-                print(f"    [정렬] 보정 위치가 도달 불가 — 중단 ({e})")
-            return False
+                print(f"    [정렬] 보정 위치가 도달 불가 — 이전 값 유지 ({e})")
+            return (dcol, drow)
+        dcol, drow = new_dcol, new_drow
 
         import time
         import hardware.arm_controller as ac
@@ -124,5 +136,6 @@ def align_over_square(arm, detector, col: int, row: int, lift: float,
             view_cb()
 
     if verbose:
-        print(f"    [정렬] {max_iter}회 반복 후에도 허용치 미달 — 그대로 진행")
-    return False
+        print(f"    [정렬] {max_iter}회 반복 후에도 허용치 미달 — "
+              f"현재 보정({dcol:+.2f}, {drow:+.2f}칸)으로 진행")
+    return (dcol, drow)

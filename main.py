@@ -56,6 +56,30 @@ def load_rl_model():
 # ─────────────────────────────────────────
 # 게임 루프
 # ─────────────────────────────────────────
+def make_rl_corrector(rl_model, verbose=True):
+    """목표 좌표 (x,y,z) → 관절 보정 Δq 를 돌려주는 함수를 만든다.
+
+    관측 12차원: [IK 관절각 3, 실제 관절각 3(모르므로 0), 목표 xyz 3,
+                  라그랑주 필요 토크 3]
+    학습 때 VecNormalize(norm_obs=False)였으므로 관측은 정규화하지 않는다.
+    """
+    from utils.ik_solver import inverse_kinematics
+    from utils.lagrange import required_torque
+
+    def corrector(x, y, z):
+        q1, q2, q3 = inverse_kinematics(x, y, z)
+        tau = np.clip(required_torque([q1, q2, q3], [0, 0, 0], [0.1, 0.1, 0.1]),
+                      -TAU_OBS_LIMIT, TAU_OBS_LIMIT)
+        obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
+                        tau[0], tau[1], tau[2]], dtype=np.float32)
+        delta, _ = rl_model.predict(obs, deterministic=True)
+        if verbose:
+            print(f"    [RL 보정] Δq = {np.round(delta, 4)}")
+        return delta
+
+    return corrector
+
+
 def _startup_vision_check(detector):
     """시작 배치를 제대로 읽는지 게임 시작 전에 확인한다.
 
@@ -213,17 +237,11 @@ def run_game(args, arm, detector, rl_model):
             if not feasible:
                 print(f"  [경고] 토크 한계 초과: {np.round(tau, 3)} N·m")
 
-            # RL 보정 (observation 12차원: IK각 + 실제각 + 목표xyz + 라그랑주토크)
-            correction = None
-            if rl_model is not None:
-                from utils.lagrange import required_torque
-                tau = required_torque([q1,q2,q3], [0,0,0], [0.1,0.1,0.1])
-                tau_clipped = np.clip(tau, -TAU_OBS_LIMIT, TAU_OBS_LIMIT)
-                obs = np.array([q1, q2, q3, 0, 0, 0, x, y, z,
-                                tau_clipped[0], tau_clipped[1], tau_clipped[2]], dtype=np.float32)
-                delta, _ = rl_model.predict(obs, deterministic=True)
-                correction = delta
-                print(f"  [RL 보정] Δq = {np.round(delta, 4)}")
+            # RL 보정 — 목표 좌표마다 새로 계산해야 한다.
+            # ⚠️ 예전에는 출발 칸 하나로 구한 값을 도착 칸·상승 지점까지
+            #    전부에 그대로 썼다. 보정량은 위치에 따라 달라지므로 틀린
+            #    사용이었다. 이제 함수를 넘겨 각 목표마다 계산한다.
+            correction = make_rl_corrector(rl_model) if rl_model else None
 
             # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
             try:
