@@ -94,10 +94,17 @@ def _startup_vision_check(detector):
         expect[0][c] = expect[1][c] = "white"
         expect[6][c] = expect[7][c] = "black"
 
+    if getattr(detector, "_ref", None) is None:
+        print("[카메라] ⚠️ 빈 판 기준 영상이 없습니다 → 밝기 방식으로 판독합니다.")
+        print("        밝기만으로는 검은 기물과 어두운 칸을 구분하지 못합니다.")
+        print("        기물을 다 치우고 한 번만 찍어두세요:")
+        print("          python vision/check_board.py --camera <번호> --capture-empty")
+
     obs = detector.get_board_state(expect=expect)
     n = sum(obs[r][c] == expect[r][c] for r in range(8) for c in range(8))
+    mode = "빈 판 기준 영상" if getattr(detector, "_ref", None) is not None else "밝기"
     print(f"[카메라] 시작 배치 판독: 64칸 중 {n}칸 일치 "
-          f"(ROBOT_SIDE=\"{vd.ROBOT_SIDE}\", 임계 {vd.OCC_DIFF_THRESH})")
+          f"(ROBOT_SIDE=\"{vd.ROBOT_SIDE}\", 방식={mode})")
     if n >= 60:
         return
     print("  ⚠️ 판독이 시작 배치와 많이 다릅니다. 지금 판이 시작 배치가 아니면")

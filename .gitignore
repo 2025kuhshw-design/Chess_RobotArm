@@ -14,3 +14,4 @@ analysis/logs/*.csv
 
 # 실측 보정 결과 (설치 환경마다 다름)
 vision/board_fit.json
+vision/empty_ref.npz

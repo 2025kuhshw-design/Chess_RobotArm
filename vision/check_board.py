@@ -43,14 +43,29 @@ def main():
                     help="OCC_DIFF_THRESH 를 이 값으로 바꿔 시험")
     ap.add_argument("--all-sides", action="store_true",
                     help="ROBOT_SIDE 네 가지를 모두 시험해 가장 맞는 것을 찾는다")
+    ap.add_argument("--capture-empty", action="store_true",
+                    help="⭐ 체스판을 완전히 비운 뒤 실행 — 빈 판 기준 영상을 찍는다")
+    ap.add_argument("--frac", type=float, default=None,
+                    help="OCC_AREA_FRAC 을 이 값으로 바꿔 시험 (기준 영상 방식)")
     args = ap.parse_args()
 
     if args.thresh is not None:
         vd.OCC_DIFF_THRESH = args.thresh
+    if args.frac is not None:
+        vd.OCC_AREA_FRAC = args.frac
 
     det = ChessBoardDetector(camera_index=args.camera)
     try:
         expect = start_position_state()
+
+        if args.capture_empty:
+            print("\n⚠️ 체스판에 기물이 하나도 없어야 합니다.")
+            print("   로봇팔은 park(Z자) 자세로 두세요 — 그림자까지 같이 기록됩니다.")
+            input("   준비됐으면 Enter > ")
+            det.capture_empty_reference()
+            print("\n이제 기물을 시작 배치로 놓고 다시 실행하세요:")
+            print(f"   python vision/check_board.py --camera {args.camera}")
+            return
 
         if args.all_sides:
             print("\n시작 배치라고 가정하고 네 방향을 모두 시험합니다.\n")
@@ -58,7 +73,7 @@ def main():
             best = None
             for side in ("left", "right", "top", "bottom"):
                 vd.ROBOT_SIDE = side
-                obs = det.get_board_state()
+                obs = det.get_board_state(expect=expect)
                 n = agreement(obs, expect)
                 print(f"  ROBOT_SIDE = {side:6s} → 64칸 중 {n}칸 일치")
                 if best is None or n > best[0]:
@@ -76,18 +91,24 @@ def main():
             print(format_state(best[2], expect))
             return
 
-        obs = det.get_board_state()
-        print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\",  "
-              f"OCC_DIFF_THRESH = {vd.OCC_DIFF_THRESH}")
+        obs = det.get_board_state(expect=expect)
+        mode = "빈 판 기준 영상" if det._ref is not None else "밝기 (기준 영상 없음)"
+        print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\"   판정 방식: {mode}")
         print("\n카메라가 읽은 배치 (대문자=시작배치와 다른 칸):")
         print(format_state(obs, expect))
         print(f"\n시작 배치와 {agreement(obs, expect)}/64 칸 일치")
         print()
         print(det.explain_board_state())
         print("\n판단 요령:")
-        print("  · 기물 있는 칸의 |차이| 가 임계보다 작다  → --thresh 를 낮춘다")
-        print("  · 빈 칸이 기물로 잡힌다                  → --thresh 를 올린다")
-        print("  · 기물은 잡히는데 엉뚱한 칸에 있다        → --all-sides 로 방향 확인")
+        if det._ref is not None:
+            print("  · 기물 있는 칸의 비율이 낮다 → --frac 0.10 처럼 낮춘다")
+            print("  · 빈 칸이 기물로 잡힌다      → --frac 0.25 처럼 올린다")
+        else:
+            print("  ⚠️ 빈 판 기준 영상이 없습니다. 밝기만으로는 검은 기물과")
+            print("     어두운 칸을 구분할 수 없습니다. 먼저 이것부터 하세요:")
+            print(f"       python vision/check_board.py --camera {args.camera} "
+                  "--capture-empty")
+        print("  · 기물은 잡히는데 엉뚱한 칸에 있다 → --all-sides 로 방향 확인")
     finally:
         det.close()
 

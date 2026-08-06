@@ -25,6 +25,25 @@ CELL_SIZE_PX = TOP_SIZE // 8   # 한 셀 크기 (px)
 # 'python vision/check_board.py' 로 실제 차이값을 보고 정할 것.
 OCC_DIFF_THRESH = 18
 
+# ─────────────────────────────────────────
+# 빈 판 기준 영상 (권장 방식)
+# ─────────────────────────────────────────
+# ⚠️ 밝기만으로는 **검은 기물과 어두운 칸을 구분할 수 없다.** 둘 다 어둡기
+#    때문이다. 실제로 검은 기물이 어두운 칸에서만 통째로 안 잡혔고,
+#    임계값을 낮추면 빈 칸이 기물로 잡히기 시작했다(맞바꿈이라 해결 불가).
+#
+# 그래서 '기물을 다 치운 판'을 한 번 찍어두고, 그것과 **픽셀 단위로 비교**한다.
+# 검은 기물이 어두운 칸에 있어도 나뭇결·테두리·그림자가 달라지므로 잡힌다.
+# 기물이 작아도 된다 — 평균이 아니라 '달라진 픽셀의 비율'로 판단하기 때문.
+EMPTY_REF_PATH = os.path.join(os.path.dirname(__file__), "empty_ref.npz")
+# 픽셀 하나가 '달라졌다'고 볼 밝기 차.
+# 기준 영상과 빼기 때문에 나뭇결·얼룩은 상쇄되고 카메라 잡음(±3~5)만 남는다.
+# 그래서 밝기 방식보다 훨씬 낮게 잡을 수 있다. 낮추면 민감(그림자도 잡힘).
+PIXEL_DIFF_THRESH = 12
+# 셀 중앙에서 이 비율 이상 달라지면 기물이 있다고 본다.
+# 기물이 작으면 낮추고, 빈 칸이 자꾸 잡히면 올린다.
+OCC_AREA_FRAC = 0.18
+
 # 디버그 오버레이 색상 (BGR)
 LABEL_COLOR  = (0, 215, 255)    # 칸 좌표 라벨: 노랑
 ORIGIN_COLOR = (255, 0, 255)    # a1(로봇 원점) 강조: 마젠타
@@ -181,6 +200,9 @@ class ChessBoardDetector:
                                "먼저 python vision/calibrate.py 를 실행하세요.")
         self._prev_board = None
         self._last_marker_area = 0
+        self._last_means = None
+        self._last_frac = None
+        self._load_empty_ref()
         # 워밍업: 카메라를 막 열면 자동노출·화이트밸런스가 잡히기 전이라
         # 첫 몇 프레임이 어둡거나 색이 틀어져 마커를 놓친다.
         for _ in range(WARMUP_FRAMES):
@@ -224,6 +246,100 @@ class ChessBoardDetector:
         m = int(h * 0.2)
         gray = cv2.cvtColor(cell_img[m:h-m, m:w-m], cv2.COLOR_BGR2GRAY)
         return float(np.mean(gray))
+
+    @staticmethod
+    def _cell_patch(top: np.ndarray, gx: int, gy: int) -> np.ndarray:
+        """격자 (gx,gy) 셀 중앙 60% 의 흑백 패치."""
+        cell = top[gy*CELL_SIZE_PX:(gy+1)*CELL_SIZE_PX,
+                   gx*CELL_SIZE_PX:(gx+1)*CELL_SIZE_PX]
+        m = int(CELL_SIZE_PX * 0.2)
+        return cv2.cvtColor(cell[m:-m, m:-m], cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    def _cell_patches(self, top: np.ndarray) -> np.ndarray:
+        """탑뷰 → (8,8,H,W) 셀별 흑백 패치. 인덱스는 [gy][gx]."""
+        p0 = self._cell_patch(top, 0, 0)
+        out = np.zeros((8, 8) + p0.shape, dtype=np.float32)
+        for gy in range(8):
+            for gx in range(8):
+                out[gy, gx] = self._cell_patch(top, gx, gy)
+        return out
+
+    # ─────────────────────────────────────────
+    # 빈 판 기준 영상
+    # ─────────────────────────────────────────
+    def _load_empty_ref(self):
+        self._ref = None
+        if not os.path.exists(EMPTY_REF_PATH):
+            return
+        try:
+            self._ref = np.load(EMPTY_REF_PATH)["cells"].astype(np.float32)
+            print(f"[Detector] 빈 판 기준 영상 로드: {EMPTY_REF_PATH}")
+        except Exception as e:
+            print(f"[Detector] 빈 판 기준 영상 로드 실패: {e}")
+
+    def capture_empty_reference(self, frames: int = 15, save: bool = True):
+        """⚠️ 체스판을 **완전히 비운 상태**에서 호출할 것.
+
+        여러 프레임을 평균해 잡음을 줄인다. 팔은 park 에 두어 그림자가
+        게임 때와 같게 한다.
+        """
+        acc = None
+        used = 0
+        for _ in range(frames * 2):
+            ok, f = self.cap.read()
+            if not ok:
+                continue
+            p = self._cell_patches(self._get_top_view(f))
+            acc = p if acc is None else acc + p
+            used += 1
+            if used >= frames:
+                break
+        if acc is None:
+            raise RuntimeError("카메라 프레임을 못 읽었습니다")
+        self._ref = acc / used
+        if save:
+            np.savez_compressed(EMPTY_REF_PATH, cells=self._ref)
+            print(f"[Detector] 빈 판 기준 영상 저장 ({used}프레임 평균) "
+                  f"→ {EMPTY_REF_PATH}")
+        return self._ref
+
+    def _state_from_ref(self, top, expect=None):
+        """빈 판 기준 영상과 픽셀 단위로 비교해 8×8 상태를 만든다."""
+        cur = self._cell_patches(top)
+        d = cur - self._ref
+
+        # 전역 밝기 변화 보정 — 조명이 전체적으로 밝아/어두워진 만큼만 뺀다.
+        # (빈 칸이어야 할 곳들의 중앙값을 0으로 맞춘다)
+        samples = []
+        for gy in range(8):
+            for gx in range(8):
+                if expect is not None:
+                    c, r = chess_to_grid_inv(gx, gy)
+                    if expect[r][c] != "empty":
+                        continue
+                samples.append(float(np.median(d[gy, gx])))
+        if len(samples) >= 8:
+            d -= float(np.median(samples))
+
+        changed = np.abs(d) > PIXEL_DIFF_THRESH
+        frac = changed.reshape(8, 8, -1).mean(axis=2)
+
+        board, dmean = [], np.zeros((8, 8), dtype=np.float32)
+        for row in range(8):
+            line = []
+            for col in range(8):
+                gx, gy = chess_to_grid(col, row)
+                ch = changed[gy, gx]
+                dm = float(d[gy, gx][ch].mean()) if ch.any() else 0.0
+                dmean[gy, gx] = dm
+                if frac[gy, gx] < OCC_AREA_FRAC:
+                    line.append("empty")
+                else:
+                    line.append("white" if dm > 0 else "black")
+            board.append(line)
+        self._last_frac, self._last_dmean = frac, dmean
+        self._last_means = None          # 밝기 방식 표는 쓰지 않는다
+        return board
 
     def _cell_means(self, top: np.ndarray) -> np.ndarray:
         """탑뷰 → 8×8 평균 밝기 배열. 인덱스는 [gy][gx] (화면 격자)."""
@@ -289,7 +405,11 @@ class ChessBoardDetector:
             if not ret:
                 raise RuntimeError("카메라 프레임 읽기 실패")
 
-        means = self._cell_means(self._get_top_view(frame))
+        top = self._get_top_view(frame)
+        if self._ref is not None:
+            return self._state_from_ref(top, expect)
+
+        means = self._cell_means(top)
         lv, dv = self._empty_levels(means, expect)
         self._last_means, self._last_levels = means, (lv, dv)
 
@@ -305,6 +425,20 @@ class ChessBoardDetector:
 
     def explain_board_state(self, expect=None) -> str:
         """마지막 판독의 숫자를 표로 보여준다 — 임계값을 조정할 때 쓴다."""
+        if getattr(self, "_ref", None) is not None and self._last_frac is not None:
+            lines = [f"  빈 판 기준 영상과 비교 (픽셀차 > {PIXEL_DIFF_THRESH} 인 비율)",
+                     f"  판정 임계 OCC_AREA_FRAC = {OCC_AREA_FRAC:.2f}",
+                     "  칸별 변화 비율 %:"]
+            for row in range(7, -1, -1):
+                cells = []
+                for col in range(8):
+                    gx, gy = chess_to_grid(col, row)
+                    cells.append(f"{self._last_frac[gy,gx]*100:4.0f}")
+                lines.append(f"   {row+1} " + " ".join(cells))
+            lines.append("     " + "    ".join("abcdefgh"))
+            lines.append(f"  {OCC_AREA_FRAC*100:.0f}% 넘으면 기물 있음. "
+                         "기물이 작으면 OCC_AREA_FRAC 를 낮춘다.")
+            return "\n".join(lines)
         if getattr(self, "_last_means", None) is None:
             return "  (아직 판독한 적이 없습니다)"
         lv, dv = self._last_levels

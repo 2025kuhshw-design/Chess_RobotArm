@@ -181,6 +181,7 @@ def main():
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal <칸> 오프셋측정")
         print("              board  기물 인식·판 방향 점검 (시작 배치와 대조)")
+        print("              refcap ⭐ 빈 판 기준 영상 찍기 (기물 다 치우고)")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
     print("  ⚠️ 시작 시 아무 명령도 보내지 않습니다. 첫 이동 명령부터 제어 시작.")
@@ -401,6 +402,20 @@ def main():
                     else:
                         try: show_live(float(arg))       # 'show 10' = 10초만
                         except ValueError: print("  show | show off | show <초>")
+                elif p[0] == "refcap":
+                    # 빈 판 기준 영상 찍기 — 밝기 방식으로는 검은 기물과
+                    # 어두운 칸을 구분할 수 없어서 반드시 필요하다.
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    print("  ⚠️ 체스판에서 기물을 전부 치우세요.")
+                    print("     팔은 park(Z자)로 — 그림자까지 같이 기록됩니다.")
+                    if input("     준비됐으면 Enter (취소는 x) > ").strip().lower() == "x":
+                        continue
+                    if live is not None and live.running:
+                        live.stop(); print("  (라이브 뷰 잠시 종료)")
+                    detector.capture_empty_reference()
+                    print("  이제 기물을 놓고 'board' 로 확인하세요.")
+
                 elif p[0] == "board":
                     # 기물 인식이 되는지 / 판 방향이 맞는지 그 자리에서 확인
                     if detector is None:
