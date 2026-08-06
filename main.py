@@ -80,19 +80,17 @@ def make_rl_corrector(rl_model, verbose=True):
     return corrector
 
 
-def _startup_vision_check(detector):
+def _startup_vision_check(detector, board):
     """시작 배치를 제대로 읽는지 게임 시작 전에 확인한다.
 
     기물 인식이나 판 방향이 틀렸다면 여기서 드러난다. 게임 도중에
     "이동 감지 실패"만 반복되는 것보다 훨씬 빨리 알 수 있다.
+    board: 실제 시작 국면 (--fen 으로 바꿀 수 있다)
     """
     import vision.detect as vd
-    from vision.detect import format_state
+    from vision.detect import format_state, board_to_state
 
-    expect = [["empty"] * 8 for _ in range(8)]
-    for c in range(8):
-        expect[0][c] = expect[1][c] = "white"
-        expect[6][c] = expect[7][c] = "black"
+    expect = board_to_state(board)
 
     if getattr(detector, "_ref", None) is None:
         print("[카메라] ⚠️ 빈 판 기준 영상이 없습니다 → 밝기 방식으로 판독합니다.")
@@ -175,7 +173,13 @@ def run_game(args, arm, detector, rl_model):
     from utils.lagrange    import check_torque_feasibility
     from utils.chess_utils import stockfish_move, move_to_squares, is_capture
 
-    board = chess.Board()
+    try:
+        board = chess.Board(args.fen)
+    except ValueError as e:
+        print(f"[main] FEN 오류: {e}"); return
+    if not board.is_valid():
+        print("[main] 그 FEN 은 유효한 국면이 아닙니다 "
+              "(양쪽 킹이 하나씩 있어야 합니다)"); return
 
     # 카메라 폐루프 정렬 콜백 — 하강 직전마다 마커를 보고 위치를 보정
     aligner = None
@@ -296,6 +300,10 @@ def main():
                         help="스텝 간 대기(s). 클수록 느리고 안전")
     parser.add_argument("--no-startup", action="store_true",
                         help="기동 절차를 건너뛴다 (팔이 이미 PARK에 잡혀 있을 때)")
+    parser.add_argument("--fen", type=str, default=chess.STARTING_FEN,
+                        help="시작 국면 (FEN). 기물이 32개가 안 될 때 실제로 "
+                             "놓은 배치를 지정한다. "
+                             "예: \"4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1\"")
     parser.add_argument("--view", action="store_true",
                         help="카메라 화면을 계속 띄운다 (test_square의 show와 동일). "
                              "인식 상태를 눈으로 보며 진행할 수 있다")
@@ -363,7 +371,7 @@ def main():
         try:
             from vision.detect import ChessBoardDetector
             detector = ChessBoardDetector(CALIB_PATH, args.camera)
-            _startup_vision_check(detector)
+            _startup_vision_check(detector, chess.Board(args.fen))
             if args.view:
                 # 라이브 뷰가 카메라 읽기를 독점하므로, 인식은 프록시를 통해
                 # 그 최신 프레임을 빌려 쓴다 (프레임 뺏김 방지).

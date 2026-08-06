@@ -23,13 +23,11 @@ import vision.detect as vd
 from vision.detect import ChessBoardDetector, format_state
 
 
-def start_position_state():
-    """체스 시작 배치를 8×8 배열로."""
-    st = [["empty"] * 8 for _ in range(8)]
-    for col in range(8):
-        st[0][col] = st[1][col] = "white"    # 랭크 1,2
-        st[6][col] = st[7][col] = "black"    # 랭크 7,8
-    return st
+def start_position_state(fen=None):
+    """대조할 배치를 8×8 배열로. fen 을 주면 그 국면, 없으면 표준 시작 배치."""
+    import chess
+    from vision.detect import board_to_state
+    return board_to_state(chess.Board(fen) if fen else chess.Board())
 
 
 def agreement(a, b) -> int:
@@ -47,6 +45,9 @@ def main():
                     help="⭐ 체스판을 완전히 비운 뒤 실행 — 빈 판 기준 영상을 찍는다")
     ap.add_argument("--frac", type=float, default=None,
                     help="OCC_AREA_FRAC 을 이 값으로 바꿔 시험 (기준 영상 방식)")
+    ap.add_argument("--fen", type=str, default=None,
+                    help="대조할 배치 (FEN). 기물이 32개가 아니면 실제로 놓은 "
+                         "배치를 지정한다")
     args = ap.parse_args()
 
     if args.thresh is not None:
@@ -56,7 +57,7 @@ def main():
 
     det = ChessBoardDetector(camera_index=args.camera)
     try:
-        expect = start_position_state()
+        expect = start_position_state(args.fen)
 
         if args.capture_empty:
             print("\n⚠️ 체스판에 기물이 하나도 없어야 합니다.")
