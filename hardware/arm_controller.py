@@ -30,7 +30,7 @@ EXPECTED_FW      = "3"         # servo_control.ino 의 FW_VERSION 과 일치해�
 # 실측 오차도 여기서 함께 흡수한다.
 #   값을 키우면 더 깊이 내려감. 너무 크면 기물을 밀거나 서보에 무리.
 #   test_square에서 'zoff 8' 처럼 mm 단위로 실시간 조정해 값을 찾을 것.
-TOUCH_PRESS      = 0.003       # 3mm 더 눌러 내려감
+TOUCH_PRESS      = 0.008       # 8mm 더 눌러 내려감
                                # (기물 4~5mm 기준. 너무 키우면 판을 긁는다)
 LIFT_HEIGHT      = 0.04        # 기본 안전 높이 (m) — 기물 7mm 기준 충분
 LIFT_MIN         = 0.015       # 최소 리프트 (m) — 기물(7mm)보다 커야 함
