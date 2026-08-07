@@ -1222,8 +1222,10 @@ class ChessBoardDetector:
                             f"  ({mk[0]:.2f},{mk[1]:.2f})",
                             (5, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
             else:
-                cv2.putText(top, "MARK: not found", (5, 34),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                why = getattr(self, "_last_marker_fail", None)
+                cv2.putText(top, f"MARK: not found — {why}" if why
+                            else "MARK: not found", (5, 34),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
 
             # 축 방향 안내 — 로봇이 있는 변을 표시
             side_txt = {"bottom": "ROBOT THIS SIDE (v)", "top": "ROBOT THIS SIDE (^)",
@@ -1276,15 +1278,26 @@ class ChessBoardDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
 
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # ⚠️ 왜 못 찾았는지 남긴다. "not found" 만 띄우면 색이 안 맞는 건지
+        #    덩어리가 너무 큰/작은 건지 구분이 안 돼 엉뚱한 데를 고치게 된다.
+        raw_max = max((cv2.contourArea(c) for c in cnts), default=0.0)
         cnts = [c for c in cnts if cv2.contourArea(c) >= MARKER_MIN_AREA]
         if not cnts:
+            self._last_marker_area = raw_max
+            self._last_marker_fail = (
+                f"색이 안 맞음 (범위에 든 픽셀 0)" if raw_max == 0 else
+                f"덩어리가 너무 작음 {raw_max:.0f} < {MARKER_MIN_AREA}px")
             return None
         best = max(cnts, key=cv2.contourArea)
         area = cv2.contourArea(best)
         if area > MARKER_MAX_AREA:
             # 체스판 밝은 칸이나 조명 반사를 잡은 것 — 채도(S) 최소값을 올릴 것
             self._last_marker_area = area
+            self._last_marker_fail = (
+                f"덩어리가 너무 큼 {area:.0f} > {MARKER_MAX_AREA}px "
+                "(판·반사를 잡는 중)")
             return None
+        self._last_marker_fail = None
         self._last_marker_area = area
         M = cv2.moments(best)
         if M["m00"] == 0:

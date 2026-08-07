@@ -102,7 +102,7 @@ def _n_inside(lo, hi, neg):
     return int(np.all((neg >= lo) & (neg <= hi), axis=1).sum())
 
 
-def fit_range(pos, neg):
+def fit_range(pos, neg, pad_max=None):
     """양성은 감싸되 음성은 하나도 안 들어가는 **가장 큰** HSV 상자.
 
     반환: ((lo), (hi), pads, leak)
@@ -114,13 +114,19 @@ def fit_range(pos, neg):
     """
     neg = np.asarray(neg, dtype=float) if len(neg) else np.zeros((0, 3))
     budget = int(len(neg) * NEG_TOL_FRAC)
+    # ⚠️ 축마다 넓혀도 되는 한계가 다르다. 마커처럼 색이 뚜렷한 것은 H를
+    #    넓히면 안 된다 — 음성 표본에 없던 색(예: 파란 기물)까지 삼킨다.
+    #    실제로 H를 179까지 열었더니 파란 기물(H=112)이 마커로 잡혔다.
+    pm = (255, 255, 255) if pad_max is None else pad_max
+    cands = [tuple(p for p in PAD_CANDIDATES if p <= pm[i]) or (0,)
+             for i in range(3)]
 
     for pct in (CORE_PCT,) + FALLBACK_PCT:
         lo0, hi0 = _box(pos, pct)
         best = None
-        for ph in PAD_CANDIDATES:
-            for ps in PAD_CANDIDATES:
-                for pv in PAD_CANDIDATES:
+        for ph in cands[0]:
+            for ps in cands[1]:
+                for pv in cands[2]:
                     pad = np.array([ph, ps, pv], dtype=float)
                     lo = np.maximum(0.0, lo0 - pad)
                     hi = np.minimum(HSV_MAX, hi0 + pad)
@@ -129,7 +135,7 @@ def fit_range(pos, neg):
                     score = ph + ps + pv
                     if best is None or score > best[0]:
                         best = (score, lo, hi, (ph, ps, pv))
-            if best is not None and best[3][0] == PAD_CANDIDATES[0]:
+            if best is not None and best[3][0] == cands[0][0]:
                 break          # H를 최대로 넓히고도 통과 — 더 볼 필요 없음
         if best is not None:
             _, lo, hi, pads = best
