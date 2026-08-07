@@ -11,6 +11,7 @@
 import argparse
 import os
 import sys
+import time
 import chess
 import numpy as np
 
@@ -266,7 +267,11 @@ def run_game(args, arm, detector, rl_model):
             #    is_castling/is_en_passant 판정이 된다.
             ops, notes = physical_ops(board, move)
 
+            # 수를 두기 전/후의 기대 배치 — 카메라 확인에 쓴다
+            from vision.detect import board_to_state
+            before_state = board_to_state(board) if detector else None
             board.push(move)
+            after_state = board_to_state(board) if detector else None
             print(f"  로봇: {move}  {'(기물 잡기)' if capture else ''}")
             for n in notes:
                 print(f"    {n}")
@@ -288,35 +293,69 @@ def run_game(args, arm, detector, rl_model):
 
             correction = corrector
 
-            # ⭐ 팔이 움직이기 **전에** 기물 위치를 찍어둔다.
-            #    팔이 칸 위로 가면 카메라가 그 기물을 못 본다 — 그 자리에서
-            #    재면 흡착컵을 기물로 착각한다. 지금은 팔이 park(Z자)에 있어
-            #    판이 통째로 보인다.
-            if detector is not None:
-                try:
-                    detector.snapshot_pieces()
-                except Exception as e:
-                    print(f"  [기물위치] 기록 실패 — 칸 중심으로 진행 ({e})")
-                    detector.clear_piece_snapshot()
-
-            # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
-            try:
-                arm.execute_move(from_sq, to_sq, is_capture=capture,
-                                 rl_correction=correction,
-                                 confirm=args.confirm,
-                                 aligner=aligner,
-                                 ops=ops)
-            except ValueError as e:
-                print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
-                print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")
-                try:
-                    arm.home()
-                except Exception:
-                    pass
-            finally:
-                # 수를 두면 판이 바뀌었다 — 낡은 위치를 다음 수에 쓰면 안 된다.
+            # 실행 — 끝난 뒤 카메라로 확인하고, 집기에 실패했으면 다시 한다.
+            # ⚠️ 확인은 팔이 park(Z자)로 물러난 뒤에 해야 한다. 팔이 판 위에
+            #    있으면 흡착컵을 기물로 착각한다. execute_move 는 마지막에
+            #    안전높이로 올라가므로, 여기서 한 번 더 접어 시야를 비운다.
+            from hardware.verify_move import (check_move, check_placement,
+                                              RETRY_MAX)
+            for attempt in range(RETRY_MAX + 1):
+                # ⭐ 팔이 움직이기 **전에** 기물 위치를 찍어둔다. 팔이 칸 위로
+                #    가면 카메라가 그 기물을 못 본다 — 그 자리에서 재면
+                #    흡착컵을 기물로 착각한다. 지금은 팔이 park(Z자)에 있다.
+                #    ⚠️ 재시도할 때마다 다시 찍어야 한다. 첫 시도에서 기물이
+                #       조금 밀렸을 수 있다.
                 if detector is not None:
-                    detector.clear_piece_snapshot()
+                    try:
+                        detector.snapshot_pieces()
+                    except Exception as e:
+                        print(f"  [기물위치] 기록 실패 — 칸 중심으로 진행 ({e})")
+                        detector.clear_piece_snapshot()
+                try:
+                    arm.execute_move(from_sq, to_sq, is_capture=capture,
+                                     rl_correction=correction,
+                                     confirm=args.confirm,
+                                     aligner=aligner,
+                                     ops=ops)
+                except ValueError as e:
+                    print(f"  [경고] 팔 동작 실패(도달 불가): {e}")
+                    print(f"         수는 보드에 반영됨. 기물을 손으로 옮겨주세요.")
+                    try:
+                        arm.home()
+                    except Exception:
+                        pass
+                    break
+                finally:
+                    # 판이 바뀌었다 — 낡은 기물 위치를 다음에 쓰면 안 된다.
+                    if detector is not None:
+                        detector.clear_piece_snapshot()
+
+                if detector is None:
+                    break
+                try:
+                    import hardware.arm_controller as ac
+                    arm.home()          # Z자로 접어 판을 카메라에 비워준다
+                    time.sleep(ac.SETTLE_WAIT)
+                    status, msg = check_move(detector, before_state,
+                                             after_state, from_sq, to_sq)
+                except Exception as e:
+                    print(f"  [확인] 실패 — 그냥 진행 ({e})"); break
+
+                if status == "ok":
+                    check_placement(detector, to_sq)   # 밀림 학습
+                    break
+                if status == "unknown":
+                    print(f"  [확인] {msg}"); break
+                if status == "retry" and attempt < RETRY_MAX:
+                    print(f"  [확인] {msg} → 다시 시도합니다 "
+                          f"({attempt+2}/{RETRY_MAX+1})")
+                    continue
+                # 자동으로 못 고치는 경우 — 사람에게 넘긴다
+                print(f"  ⚠️ [확인] {msg}")
+                print(f"     엔진이 아는 판과 실제 판이 어긋났습니다.")
+                print(f"     {move} 가 되도록 기물을 손으로 옮겨주세요.")
+                input("     옮겼으면 Enter > ")
+                break
 
     # 게임 종료
     print("\n" + "="*50)

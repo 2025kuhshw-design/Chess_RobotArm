@@ -117,8 +117,12 @@ class DetectorProxy:
     def snapshot_pieces(self, **kw):
         return self.det.snapshot_pieces(frame=self._borrow(), **kw)
 
-    def get_stable_board_state(self, tries: int = 6):
-        return self.det.get_stable_board_state(tries, frame_src=self._borrow_fresh)
+    def get_stable_board_state(self, tries: int = 6, expect=None):
+        # ⚠️ expect 를 빠뜨리면 프록시를 통했을 때만 판정 기준이 달라져,
+        #    같은 장면을 라이브 뷰 유무에 따라 다르게 읽는다.
+        return self.det.get_stable_board_state(tries,
+                                               frame_src=self._borrow_fresh,
+                                               expect=expect)
 
     def _borrow_fresh(self):
         """안정화 판정용 — 매번 새 프레임을 준다(뷰가 계속 갱신하므로)."""
