@@ -170,6 +170,40 @@ def apply_marker_fit(col: float, row: float) -> tuple:
     return (a * col + b * row + c, d * col + e * row + f)
 
 # ─────────────────────────────────────────
+# 감마 — 흰 기물과 밝은 칸을 갈라놓는 장치
+# ─────────────────────────────────────────
+# 흰 기물 윗면과 카페라떼색 칸은 **색상(H)이 거의 같다**(둘 다 H≈18).
+# 갈라놓는 축은 채도(S) 뿐이다: 흰 기물 S≈5, 카페라떼 S≈83.
+#
+# 감마 g>1 을 걸면(=어둡게) 채도 간격이 벌어진다. S = 1 - min/max 인데
+# 각 채널을 g 제곱하면 (min/max)^g 가 작아져서 S가 커지고, 원래 채도가
+# 높은 쪽이 더 많이 커지기 때문이다. 실측 근사값 기준:
+#     g=1.0 → 흰 S=5,  라떼 S= 83   간격 78
+#     g=2.0 → 흰 S=10, 라떼 S=139   간격 129
+# 흰 기물이 노출 과다로 255에 붙어 있을 때도 되살려 준다.
+#
+# ⚠️ 감마를 바꾸면 빈 판 기준 영상(empty_ref.npz)도 다시 찍어야 한다.
+#    기준 영상에 그때의 감마를 같이 저장해 두고, 다르면 경고한다.
+GAMMA = 1.0
+_GAMMA_LUT = None
+
+
+def set_gamma(g: float):
+    """감마를 바꾸고 LUT를 다시 만든다. 1.0 이면 아무것도 안 한다."""
+    global GAMMA, _GAMMA_LUT
+    GAMMA = float(g)
+    if abs(GAMMA - 1.0) < 1e-6:
+        _GAMMA_LUT = None
+        return
+    _GAMMA_LUT = np.array([((i / 255.0) ** GAMMA) * 255.0
+                           for i in range(256)], dtype=np.uint8)
+
+
+def apply_gamma(img: np.ndarray) -> np.ndarray:
+    return img if _GAMMA_LUT is None else cv2.LUT(img, _GAMMA_LUT)
+
+
+# ─────────────────────────────────────────
 # 실측한 색 설정 (vision/colors.json)
 # ─────────────────────────────────────────
 # ⚠️ 색은 조명·카메라·기물마다 다르므로 **설치 환경마다 다른 값**이다.
@@ -212,11 +246,14 @@ def load_colors(path: str = None) -> bool:
         MARKER_OFFSET_COL, MARKER_OFFSET_ROW = (float(v) for v in d["marker_offset"])
     if "marker_fit" in d:
         MARKER_FIT = [float(v) for v in d["marker_fit"]] if d["marker_fit"] else None
+    if "gamma" in d:
+        set_gamma(d["gamma"])
     return True
 
 
 def save_colors(marker=None, white=None, black=None, color_mode=None,
-                marker_offset=None, marker_fit=None, path: str = None):
+                marker_offset=None, marker_fit=None, gamma=None,
+                path: str = None):
     """colors.json 에 색 설정을 저장한다. None 인 항목은 기존 값을 유지."""
     path = path or COLORS_PATH
     d = {}
@@ -238,6 +275,8 @@ def save_colors(marker=None, white=None, black=None, color_mode=None,
         d["marker_offset"] = [float(marker_offset[0]), float(marker_offset[1])]
     if marker_fit is not None:
         d["marker_fit"] = [float(v) for v in marker_fit] if marker_fit else None
+    if gamma is not None:
+        d["gamma"] = float(gamma)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
     load_colors(path)          # 방금 저장한 값을 바로 반영
@@ -382,7 +421,10 @@ class ChessBoardDetector:
     # 탑뷰 변환
     # ─────────────────────────────────────────
     def _get_top_view(self, frame: np.ndarray) -> np.ndarray:
-        return cv2.warpPerspective(frame, self._M, (TOP_SIZE, TOP_SIZE))
+        # 감마는 여기 한 곳에서만 건다. 색 판정·빈 판 비교·밝기·마커가 모두
+        # 이 함수를 거치므로, 어디 한 군데만 감마가 다른 사고가 안 난다.
+        return apply_gamma(cv2.warpPerspective(frame, self._M,
+                                               (TOP_SIZE, TOP_SIZE)))
 
     # ─────────────────────────────────────────
     # 셀 밝기 측정
@@ -420,8 +462,17 @@ class ChessBoardDetector:
         if not os.path.exists(EMPTY_REF_PATH):
             return
         try:
-            self._ref = np.load(EMPTY_REF_PATH)["cells"].astype(np.float32)
+            z = np.load(EMPTY_REF_PATH)
+            self._ref = z["cells"].astype(np.float32)
             print(f"[Detector] 빈 판 기준 영상 로드: {EMPTY_REF_PATH}")
+            # 기준 영상은 찍을 당시의 감마로 밝기가 정해져 있다. 지금 감마가
+            # 다르면 판 전체가 '달라진 픽셀'로 잡혀 전 칸이 기물이 된다.
+            g_ref = float(z["gamma"]) if "gamma" in z.files else 1.0
+            if abs(g_ref - GAMMA) > 1e-3:
+                print(f"  ⚠️ 기준 영상은 감마 {g_ref:.2f} 로 찍혔는데 지금은 "
+                      f"{GAMMA:.2f} 입니다.")
+                print("     → python vision/check_board.py --capture-empty 로 "
+                      "다시 찍으세요.")
         except Exception as e:
             print(f"[Detector] 빈 판 기준 영상 로드 실패: {e}")
 
@@ -446,8 +497,10 @@ class ChessBoardDetector:
             raise RuntimeError("카메라 프레임을 못 읽었습니다")
         self._ref = acc / used
         if save:
-            np.savez_compressed(EMPTY_REF_PATH, cells=self._ref)
-            print(f"[Detector] 빈 판 기준 영상 저장 ({used}프레임 평균) "
+            np.savez_compressed(EMPTY_REF_PATH, cells=self._ref,
+                                gamma=np.float32(GAMMA))
+            print(f"[Detector] 빈 판 기준 영상 저장 ({used}프레임 평균, "
+                  f"감마 {GAMMA:.2f}) "
                   f"→ {EMPTY_REF_PATH}")
         return self._ref
 

@@ -48,8 +48,13 @@ def main():
     ap.add_argument("--fen", type=str, default=None,
                     help="대조할 배치 (FEN). 기물이 32개가 아니면 실제로 놓은 "
                          "배치를 지정한다")
+    ap.add_argument("--gamma", type=float, default=None,
+                    help="감마를 이 값으로 바꿔 시험 (저장은 안 함). 기준 영상은 "
+                         "찍을 때의 감마로 고정되므로 --capture-empty 와 같이 쓸 것")
     args = ap.parse_args()
 
+    if args.gamma is not None:
+        vd.set_gamma(args.gamma)
     if args.thresh is not None:
         vd.OCC_DIFF_THRESH = args.thresh
     if args.frac is not None:
