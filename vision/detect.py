@@ -390,11 +390,38 @@ class ChessBoardDetector:
         self._last_means = None
         self._last_frac = None
         self._load_empty_ref()
-        # 워밍업: 카메라를 막 열면 자동노출·화이트밸런스가 잡히기 전이라
-        # 첫 몇 프레임이 어둡거나 색이 틀어져 마커를 놓친다.
-        for _ in range(WARMUP_FRAMES):
-            self.cap.read()
+        self._warmup()
         print(f"[Detector] 카메라 {camera_index} 초기화 완료")
+
+    def _warmup(self, max_frames: int = 90, settle: int = 4,
+                tol: float = 0.4) -> int:
+        """자동노출·화이트밸런스가 **안정될 때까지** 프레임을 버린다.
+
+        ⚠️ 예전에는 무조건 8프레임만 버렸다. 그런데 자동노출이 잡히는 데는
+           보통 1초(≈30프레임) 넘게 걸린다. 그래서 계속 돌던 라이브 뷰와
+           방금 연 check_board 가 **서로 다른 색을 보고 다른 판정**을 냈다.
+           밝게 뜬 프레임에서는 카페라떼 칸이 채도를 잃어 흰 기물 범위 안으로
+           들어와 버린다(빈 랭크가 통째로 흰 기물이 되는 증상).
+        여기서는 화면 평균 밝기가 연속으로 안 변할 때까지 기다린다.
+        """
+        prev, stable, used = None, 0, 0
+        for _ in range(max_frames):
+            ok, f = self.cap.read()
+            if not ok:
+                continue
+            used += 1
+            m = float(f[::8, ::8].mean())
+            if prev is not None and abs(m - prev) < tol:
+                stable += 1
+                if stable >= settle and used >= WARMUP_FRAMES:
+                    break
+            else:
+                stable = 0
+            prev = m
+        if stable < settle:
+            print(f"  ⚠️ 노출이 {used}프레임 동안 안 잡혔습니다 — 조명이 깜빡이거나"
+                  " 카메라 자동노출이 계속 움직이는 중입니다.")
+        return used
 
     # ─────────────────────────────────────────
     # 캘리브레이션 로드
@@ -577,6 +604,7 @@ class ChessBoardDetector:
         self._last_frac = np.maximum(fw, fb)
         self._last_fw, self._last_fb = fw, fb
         self._last_means = None
+        self._last_top = top          # 왜 그렇게 판정했는지 되짚기 위해 보관
         return board
 
     def _state_from_ref(self, top, expect=None):
@@ -746,6 +774,62 @@ class ChessBoardDetector:
             board.append(board_row)
         return board
 
+    @staticmethod
+    def _in_ranges(v, ranges) -> bool:
+        return any(all(lo[i] <= v[i] <= hi[i] for i in range(3))
+                   for lo, hi in ranges)
+
+    def _explain_color_ranges(self, expect=None) -> list:
+        """등록된 색 범위 안에 **판 색이 들어와 있는지**를 직접 보여준다.
+
+        빈 랭크가 통째로 기물로 읽히는 사고는 거의 항상 이것 하나가 원인이다:
+        기물 색 범위가 넓어서 판 색까지 삼킨 것. 표만 봐서는 알 수 없으니
+        지금 화면의 빈 칸 색을 실제로 재서 범위 안인지 아닌지 적는다.
+        """
+        top = getattr(self, "_last_top", None)
+        out = ["",
+               f"  감마 {GAMMA:.2f}",
+               f"  등록된 흰쪽 범위   {PIECE_HSV_WHITE}",
+               f"  등록된 검은쪽 범위 {PIECE_HSV_BLACK}"]
+        if top is None:
+            return out
+        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+        m0 = int(CELL_SIZE_PX * 0.2)
+        groups = {"밝은 칸": [], "어두운 칸": []}
+        for gy in range(8):
+            for gx in range(8):
+                if expect is not None:
+                    c, r = chess_to_grid_inv(gx, gy)
+                    if expect[r][c] != "empty":
+                        continue
+                x0, y0 = cell_px(gx, gy)
+                patch = hsv[y0+m0:y0+CELL_SIZE_PX-m0,
+                            x0+m0:x0+CELL_SIZE_PX-m0].reshape(-1, 3)
+                key = "밝은 칸" if (gx + gy) % 2 == 0 else "어두운 칸"
+                groups[key].append(np.median(patch, axis=0))
+        out.append("  지금 화면의 빈 칸 색 (중앙값):")
+        bad = False
+        for key, vals in groups.items():
+            if not vals:
+                continue
+            v = np.median(np.array(vals), axis=0)
+            hits = []
+            if PIECE_HSV_WHITE and self._in_ranges(v, PIECE_HSV_WHITE):
+                hits.append("흰쪽"); bad = True
+            if PIECE_HSV_BLACK and self._in_ranges(v, PIECE_HSV_BLACK):
+                hits.append("검은쪽"); bad = True
+            mark = f"❌ {'/'.join(hits)} 기물 범위 안!" if hits else "✅ 범위 밖"
+            out.append(f"    {key}  HSV=({v[0]:.0f},{v[1]:.0f},{v[2]:.0f})  {mark}")
+        if bad:
+            out += [
+                "  → 빈 칸이 기물로 읽히는 이유가 바로 이것입니다. 색 범위가 판 색까지",
+                "     덮고 있습니다. 다시 등록하세요 (판을 음성 표본으로 같이 모읍니다):",
+                "       python vision/pick_pieces.py --camera 1",
+                "       ] 로 감마를 2.0 근처까지 올리고 → b(빈 칸 자동수집)",
+                "       → 1/2 로 기물 클릭 → s",
+            ]
+        return out
+
     def explain_board_state(self, expect=None) -> str:
         """마지막 판독의 숫자를 표로 보여준다 — 임계값을 조정할 때 쓴다."""
         if PIECE_COLOR_MODE and getattr(self, "_last_fw", None) is not None:
@@ -760,6 +844,7 @@ class ChessBoardDetector:
             lines.append("      " + "       ".join("abcdefgh"))
             lines.append("  둘 다 임계 미만이면 빈 칸. 기물이 작으면 "
                          "PIECE_COLOR_MIN_FRAC 을 낮춘다.")
+            lines += self._explain_color_ranges(expect)
             return "\n".join(lines)
         if getattr(self, "_ref", None) is not None and self._last_frac is not None:
             lines = [f"  빈 판 기준 영상과 비교 (픽셀차 > {PIXEL_DIFF_THRESH} 인 비율)",
@@ -786,6 +871,7 @@ class ChessBoardDetector:
                                      f"{self._last_fb[gy,gx]*100:<3.0f}")
                     lines.append(f"   {row+1} " + " ".join(cells))
                 lines.append("      " + "       ".join("abcdefgh"))
+                lines += self._explain_color_ranges(expect)
             else:
                 lines.append("  ⚠️ 기물 색이 등록돼 있지 않아 흑/백을 '칸보다 밝은가'로"
                              " 판정합니다.")

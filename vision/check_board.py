@@ -48,6 +48,9 @@ def main():
     ap.add_argument("--fen", type=str, default=None,
                     help="대조할 배치 (FEN). 기물이 32개가 아니면 실제로 놓은 "
                          "배치를 지정한다")
+    ap.add_argument("--watch", action="store_true",
+                    help="일치 칸 수를 계속 출력 — 라이브 뷰와 결과가 다를 때 "
+                         "자동노출 탓인지 확인한다")
     ap.add_argument("--gamma", type=float, default=None,
                     help="감마를 이 값으로 바꿔 시험 (저장은 안 함). 기준 영상은 "
                          "찍을 때의 감마로 고정되므로 --capture-empty 와 같이 쓸 것")
@@ -97,13 +100,26 @@ def main():
             print(format_state(best[2], expect))
             return
 
+        if args.watch:
+            # 라이브 뷰에서는 맞는데 여기서는 틀린다면 자동노출이 범인일 수 있다.
+            # 같은 카메라를 계속 읽으면서 일치 칸 수가 움직이는지 본다.
+            print("\n일치 칸 수를 계속 찍습니다 (Ctrl+C 로 중단).")
+            print("숫자가 처음엔 낮다가 올라가면 자동노출이 늦게 잡히는 것입니다.\n")
+            try:
+                while True:
+                    o = det.get_board_state(expect=expect)
+                    print(f"  {agreement(o, expect)}/64 일치", flush=True)
+            except KeyboardInterrupt:
+                print()
+            return
+
         obs = det.get_board_state(expect=expect)
         print(f"\nROBOT_SIDE = \"{vd.ROBOT_SIDE}\"   판정 방식: {det.detection_mode()}")
         print("\n카메라가 읽은 배치 (대문자=시작배치와 다른 칸):")
         print(format_state(obs, expect))
         print(f"\n시작 배치와 {agreement(obs, expect)}/64 칸 일치")
         print()
-        print(det.explain_board_state())
+        print(det.explain_board_state(expect))
         print("\n판단 요령:")
         if "색" in det.detection_mode():
             print("  · 기물 있는 칸의 비율이 낮다 → detect.py 의 "
