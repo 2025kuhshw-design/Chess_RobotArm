@@ -288,6 +288,17 @@ def run_game(args, arm, detector, rl_model):
 
             correction = corrector
 
+            # ⭐ 팔이 움직이기 **전에** 기물 위치를 찍어둔다.
+            #    팔이 칸 위로 가면 카메라가 그 기물을 못 본다 — 그 자리에서
+            #    재면 흡착컵을 기물로 착각한다. 지금은 팔이 park(Z자)에 있어
+            #    판이 통째로 보인다.
+            if detector is not None:
+                try:
+                    detector.snapshot_pieces()
+                except Exception as e:
+                    print(f"  [기물위치] 기록 실패 — 칸 중심으로 진행 ({e})")
+                    detector.clear_piece_snapshot()
+
             # 실행 (IK 실패 등으로 게임 전체가 죽지 않도록 방어)
             try:
                 arm.execute_move(from_sq, to_sq, is_capture=capture,
@@ -302,6 +313,10 @@ def run_game(args, arm, detector, rl_model):
                     arm.home()
                 except Exception:
                     pass
+            finally:
+                # 수를 두면 판이 바뀌었다 — 낡은 위치를 다음 수에 쓰면 안 된다.
+                if detector is not None:
+                    detector.clear_piece_snapshot()
 
     # 게임 종료
     print("\n" + "="*50)

@@ -1244,8 +1244,90 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 4: 흡착컵 마커 위치 (시각 피드백 보정용)
     # ─────────────────────────────────────────
+    def _piece_mask(self, frame):
+        """기물 색(흰쪽+검은쪽) 마스크 한 장. 색이 등록 안 됐으면 None."""
+        if not (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
+            return None
+        hsv = cv2.cvtColor(self._get_top_view(frame), cv2.COLOR_BGR2HSV)
+        return cv2.morphologyEx(
+            self._color_mask(hsv, list(PIECE_HSV_WHITE) + list(PIECE_HSV_BLACK)),
+            cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+    def _center_in_cell(self, mask, col, row, max_dev=0.40, min_frac=None):
+        """마스크에서 그 칸의 기물 무게중심 → 연속 칸 좌표. 없으면 None."""
+        gx, gy = chess_to_grid(col, row)
+        x0, y0 = cell_px(gx, gy)
+        sub = mask[y0:y0 + CELL_SIZE_PX, x0:x0 + CELL_SIZE_PX]
+        thr = PIECE_COLOR_MIN_FRAC if min_frac is None else min_frac
+        if sub.size == 0 or (sub > 0).mean() < thr:
+            return None                     # 그 칸에 기물이 없다
+        # 칸 안에서 가장 큰 덩어리 하나만 — 옆 칸 기물이 걸쳐 들어오면
+        # 무게중심이 그쪽으로 끌려간다.
+        cnts, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        M = cv2.moments(max(cnts, key=cv2.contourArea))
+        if M["m00"] == 0:
+            return None
+        # ⚠️ px_to_grid_uv 는 이미 '칸 중심이 gx+0.5' 인 연속 좌표를 준다.
+        #    grid_uv_to_colrow 가 그 규약을 그대로 받으므로 0.5 를 또 더하면
+        #    안 된다(반 칸씩 밀려서 전부 max_dev 에 걸린다).
+        u, v = px_to_grid_uv(x0 + M["m10"] / M["m00"], y0 + M["m01"] / M["m00"])
+        cf, rf = grid_uv_to_colrow(u, v)
+        if math.hypot(cf - col, rf - row) > max_dev:
+            return None                     # 너무 멀다 — 잘못 잡은 것
+        return (cf, rf)
+
+    def snapshot_pieces(self, frame=None, verbose: bool = True) -> dict:
+        """지금 판에 있는 **모든 기물의 실제 중심**을 한 번에 재서 기억한다.
+
+        ⚠️ 왜 미리 재두나: 팔이 그 칸 위로 가면 카메라가 기물을 못 본다.
+           그 자리에서 재면 팔(흡착컵·마커)의 무게중심이 잡혀 엉뚱한 곳을
+           기물 중심이라고 한다. 그래서 **팔이 판 밖(park)에 있을 때** 한 번
+           찍어두고, 이후 정렬은 그 값을 쓴다.
+
+        판 상태가 바뀌면(수를 두고 나면) 반드시 다시 찍어야 한다.
+        반환: {(col,row): (col_f, row_f)}
+        """
+        if frame is None:
+            ok, frame = self.cap.read()
+            if not ok:
+                return {}
+        # ⚠️ 칸마다 piece_center 를 부르면 탑뷰 변환·HSV 변환을 64번 반복한다.
+        #    마스크는 한 번만 만들고 칸별로 잘라 쓴다.
+        mask = self._piece_mask(frame)
+        if mask is None:
+            self._piece_snapshot = {}
+            if verbose:
+                print("  [기물위치] 기물 색이 등록돼 있지 않습니다 "
+                      "(python vision/pick_pieces.py)")
+            return {}
+        snap = {}
+        for col in range(8):
+            for row in range(8):
+                c = self._center_in_cell(mask, col, row)
+                if c is not None:
+                    snap[(col, row)] = c
+        self._piece_snapshot = snap
+        if verbose:
+            # detect.py 는 픽셀 단위만 다루므로 mm 환산 상수는 여기서 정의한다
+            # (한 칸 29.125mm — utils.ik_solver.CELL_SIZE 와 같은 값)
+            off = [math.hypot(v[0]-k[0], v[1]-k[1]) * 29.125
+                   for k, v in snap.items()]
+            if off:
+                print(f"  [기물위치] {len(snap)}개 기록 — 칸 중심에서 평균 "
+                      f"{sum(off)/len(off):.1f}mm, 최대 {max(off):.1f}mm 치우침")
+            else:
+                print("  [기물위치] 기물을 하나도 못 찾았습니다 "
+                      "(기물 색이 등록됐는지 board 로 확인)")
+        return snap
+
+    def clear_piece_snapshot(self):
+        self._piece_snapshot = None
+
     def piece_center(self, col: int, row: int, frame=None,
-                     max_dev: float = 0.40, min_frac: float = None):
+                     max_dev: float = 0.40, min_frac: float = None,
+                     use_snapshot: bool = True):
         """그 칸에 있는 **기물의 실제 중심**을 연속 칸 좌표로 돌려준다.
 
         왜 필요한가:
@@ -1260,47 +1342,22 @@ class ChessBoardDetector:
            불러야 한다.
 
         max_dev : 칸 중심에서 이보다 멀면 옆 칸 기물을 잡은 것으로 보고 버린다
+        use_snapshot : snapshot_pieces() 로 미리 재둔 값이 있으면 그걸 쓴다.
+                       팔이 그 칸을 가리고 있어도 되는 유일한 방법이다.
         반환    : (col_f, row_f) 연속 좌표. 못 찾으면 None.
         """
-        if not (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
-            return None
+        if use_snapshot:
+            snap = getattr(self, "_piece_snapshot", None)
+            if snap is not None:
+                return snap.get((col, row))     # 없으면 None (그 칸은 비었음)
         if frame is None:
             ok, frame = self.cap.read()
             if not ok:
                 return None
-        top = self._get_top_view(frame)
-        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
-        k = np.ones((3, 3), np.uint8)
-        mask = cv2.morphologyEx(
-            self._color_mask(hsv, list(PIECE_HSV_WHITE) + list(PIECE_HSV_BLACK)),
-            cv2.MORPH_OPEN, k)
-
-        gx, gy = chess_to_grid(col, row)
-        x0, y0 = cell_px(gx, gy)
-        sub = mask[y0:y0 + CELL_SIZE_PX, x0:x0 + CELL_SIZE_PX]
-        thr = PIECE_COLOR_MIN_FRAC if min_frac is None else min_frac
-        if (sub > 0).mean() < thr:
-            return None                     # 그 칸에 기물이 없다
-
-        # 칸 안에서 가장 큰 덩어리 하나만 — 옆 칸 기물이 걸쳐 들어오면
-        # 무게중심이 그쪽으로 끌려간다.
-        cnts, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
+        mask = self._piece_mask(frame)
+        if mask is None:
             return None
-        best = max(cnts, key=cv2.contourArea)
-        M = cv2.moments(best)
-        if M["m00"] == 0:
-            return None
-        cx = x0 + M["m10"] / M["m00"]
-        cy = y0 + M["m01"] / M["m00"]
-        # ⚠️ px_to_grid_uv 는 이미 '칸 중심이 gx+0.5' 인 연속 좌표를 준다.
-        #    grid_uv_to_colrow 가 그 규약을 그대로 받으므로 여기서 0.5 를
-        #    또 더하면 안 된다(반 칸씩 밀려서 전부 max_dev 에 걸린다).
-        u, v = px_to_grid_uv(cx, cy)
-        cf, rf = grid_uv_to_colrow(u, v)
-        if math.hypot(cf - col, rf - row) > max_dev:
-            return None                     # 너무 멀다 — 잘못 잡은 것
-        return (cf, rf)
+        return self._center_in_cell(mask, col, row, max_dev, min_frac)
 
     def margin_report(self, frame=None) -> str:
         """판 **바깥 여유 영역**이 탑뷰에서 검게 나오는지 잰다.

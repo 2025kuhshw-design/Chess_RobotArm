@@ -147,6 +147,20 @@ def main():
 
     show = show_once
 
+    def snap_pieces():
+        """기물 위치를 미리 재둔다 — **팔이 판 위로 가기 전에** 부를 것.
+
+        팔이 칸 위에 있으면 카메라가 그 기물을 못 본다. 그 자리에서 재면
+        흡착컵·마커의 무게중심을 기물 중심이라고 하게 된다.
+        """
+        if detector is None:
+            return
+        try:
+            det_src.snapshot_pieces()
+        except Exception as e:
+            print(f"  [기물위치] 기록 실패 — 칸 중심으로 진행 ({e})")
+            detector.clear_piece_snapshot()
+
     def align(sq, suction=False, on_piece=False):
         """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신).
         ⚠️ 기물을 들고 있으면 suction=True — 안 넘기면 정렬 중 떨어뜨린다."""
@@ -321,6 +335,9 @@ def main():
                     print("  칸 이름 오류 (예: e2)"); continue
                 cur = sq
                 nudge_off[0] = nudge_off[1] = 0.0
+                # ⭐ 팔이 움직이기 **전에** 찍어야 한다. 팔이 칸 위로 가면
+                #    카메라가 기물을 못 보고 흡착컵을 기물로 착각한다.
+                snap_pieces()
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True)
                 time.sleep(ac.SETTLE_WAIT)
@@ -376,8 +393,13 @@ def main():
                 if not a or not b:
                     print("  칸 이름 오류 (예: move e2 e4)"); continue
                 print(f"  {p[1]} → {p[2]} (게임과 동일 시퀀스)")
-                arm.execute_move(a, b, is_capture=False,
-                                 aligner=aligner_cb if detector else None)
+                snap_pieces()          # 팔이 움직이기 전에 기물 위치 기록
+                try:
+                    arm.execute_move(a, b, is_capture=False,
+                                     aligner=aligner_cb if detector else None)
+                finally:
+                    if detector is not None:
+                        detector.clear_piece_snapshot()
                 cur = b
 
             else:

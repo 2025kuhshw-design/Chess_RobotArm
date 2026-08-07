@@ -114,6 +114,9 @@ class DetectorProxy:
         # 라이브 뷰가 켜져 있을 땐 반드시 빌린 프레임을 넘겨야 한다.
         return self.det.piece_center(col, row, frame=self._borrow(), **kw)
 
+    def snapshot_pieces(self, **kw):
+        return self.det.snapshot_pieces(frame=self._borrow(), **kw)
+
     def get_stable_board_state(self, tries: int = 6):
         return self.det.get_stable_board_state(tries, frame_src=self._borrow_fresh)
 
