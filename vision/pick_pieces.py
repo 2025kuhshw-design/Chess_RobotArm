@@ -380,18 +380,22 @@ def main():
                 cv2.putText(disp, "board looks GRAY -> run lock_camera.py",
                             (5, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                             (0, 0, 255), 2)
+            # ⚠️ 값이 0일 때 항목을 감추면 "0인지 확인하라"는 말이 성립하지 않는다.
+            #    (안 보이는 것과 0인 것을 구분할 수 없다) 항상 찍는다.
             leak = sum(f[3] for f in fitted.values())
-            txt = (f"mask hits  w={counts.get('w','-')} b={counts.get('b','-')}"
-                   f"   VERDICT  white={verdict['white']} black={verdict['black']} "
-                   f"empty={verdict['empty']}  (16/16/32 = OK)")
-            if ambiguous:
-                txt += f"  ambiguous {ambiguous}"
-            if leak:
-                txt += f"  !! board leak {leak}"
-            good = (verdict["white"], verdict["black"]) == (16, 16) and not ambiguous
-            cv2.putText(disp, txt, (5, disp.shape[0]-8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.40,
-                        (0, 180, 0) if good else (0, 0, 255), 1)
+            good = (verdict["white"], verdict["black"], verdict["empty"]) \
+                == (16, 16, 32) and not ambiguous and not leak
+            cv2.putText(disp, f"VERDICT  white={verdict['white']} "
+                              f"black={verdict['black']} empty={verdict['empty']}"
+                              f"   ambiguous={ambiguous}   board leak={leak}",
+                        (5, disp.shape[0]-22), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        (0, 200, 0) if good else (0, 0, 255), 1)
+            cv2.putText(disp, f"want 16/16/32, ambiguous 0, leak 0"
+                              f"    (mask hits w={counts.get('w','-')} "
+                              f"b={counts.get('b','-')} - overlap counts twice, "
+                              f"not a problem)",
+                        (5, disp.shape[0]-6), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                        (200, 200, 200), 1)
 
             cv2.imshow(WIN, disp)
             k = cv2.waitKey(30) & 0xFF
