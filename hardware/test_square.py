@@ -187,6 +187,8 @@ def main():
         print("  카메라 명령: show(켜기) / show off(끄기) | mark 마커위치 | "
               "markcal auto 시차보정")
         print("              board  기물 인식·판 방향 점검 (시작 배치와 대조)")
+        print("              margin 판 바깥을 카메라가 몇 칸까지 보는지 "
+              "(외곽 칸에서 마커가 안 보일 때)")
         print("              refcap ⭐ 빈 판 기준 영상 찍기 (기물 다 치우고)")
     print(f"  현재 위치 가정: A{arm._cur[0]},{arm._cur[1]},{arm._cur[2]}"
           "  (실제와 다르면 'set'으로 교정)")
@@ -597,6 +599,13 @@ def main():
                         print("  → python vision/check_board.py --camera <번호> "
                               "--all-sides 로 방향까지 확인해 보세요")
 
+                elif p[0] == "margin":
+                    if detector is None:
+                        print("  --camera 옵션으로 실행해야 합니다"); continue
+                    # 판 바깥을 카메라가 몇 칸까지 보는지. 외곽 칸에서 마커가
+                    # 아예 화면에 안 나올 때 원인이 여기다.
+                    print("  " + detector.margin_report().replace("\n", "\n  "))
+
                 elif p[0] == "mark":
                     if detector is None:
                         print("  --camera 옵션으로 실행해야 합니다"); continue
@@ -610,8 +619,10 @@ def main():
                             print(f"    → 너무 큰 덩어리({a:.0f}px)를 잡음. 체스판이나 반사를"
                                   f" 마커로 오인한 것입니다.")
                             print(f"       MARKER_HSV_RANGES의 채도(S) 최소값을 올리세요.")
-                        else:
-                            print("    → --mode vision 창이 닫혀 있는지, 색 범위가 맞는지 확인")
+                        # 원본 화면까지 뒤져서 '왜' 안 보이는지 가른다.
+                        # 색 문제인지, 탑뷰 밖으로 나간 건지, 카메라 화각 밖인지는
+                        # 고치는 방법이 완전히 다르다.
+                        print("  " + detector.marker_debug())
                     else:
                         import vision.detect as vd
                         print(f"  마커 위치: 파일 {mk[0]:+.2f}, 랭크 {mk[1]:+.2f} "

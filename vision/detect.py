@@ -5,6 +5,7 @@
 
 import cv2
 import json
+import math
 import numpy as np
 import os
 import time
@@ -1243,6 +1244,135 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 4: 흡착컵 마커 위치 (시각 피드백 보정용)
     # ─────────────────────────────────────────
+    def margin_report(self, frame=None) -> str:
+        """판 **바깥 여유 영역**이 탑뷰에서 검게 나오는지 잰다.
+
+        ⚠️ 여유(TOP_MARGIN_CELLS)를 늘려도, 카메라가 판 너머를 실제로 보고
+           있지 않으면 그 자리는 그냥 검다. warpPerspective 는 원본 밖을
+           검게 채우기 때문이다. 이건 소프트웨어로 못 고치고 카메라를
+           옮겨야 한다 — 그러니 어느 쪽이 안 보이는지 숫자로 보여준다.
+        """
+        if frame is None:
+            ok, frame = self.cap.read()
+            if not ok:
+                return "카메라 프레임을 못 읽었습니다"
+        h, w = frame.shape[:2]
+        # ⚠️ '검은 픽셀 비율'로 재면 안 된다 — 판 주위 책상이 어두우면
+        #    화각 안인데도 안 보인다고 나온다. 기하로 정확히 따진다:
+        #    탑뷰 좌표를 역변환해 원본 화면 안에 들어오는지 본다.
+        Minv = np.linalg.inv(self._M)
+
+        def src_ok(u, v):
+            """칸 좌표 (u,v) 가 원본 화면 안에 들어오는가."""
+            pt = np.array([[[MARGIN_PX + u * CELL_SIZE_PX,
+                             MARGIN_PX + v * CELL_SIZE_PX]]], dtype=np.float32)
+            s = cv2.perspectiveTransform(pt, Minv)[0, 0]
+            return 0 <= s[0] < w and 0 <= s[1] < h
+
+        def reach(side):
+            """그 방향으로 판 밖 몇 칸까지 카메라가 보는가 (0.1칸 단위)."""
+            best = 0.0
+            for k in range(1, 41):                 # 최대 4칸까지 확인
+                d = k * 0.1
+                pts = {"left":   [(-d, t) for t in (0.5, 4, 7.5)],
+                       "right":  [(8 + d, t) for t in (0.5, 4, 7.5)],
+                       "top":    [(t, -d) for t in (0.5, 4, 7.5)],
+                       "bottom": [(t, 8 + d) for t in (0.5, 4, 7.5)]}[side]
+                if not all(src_ok(u, v) for u, v in pts):
+                    break
+                best = d
+            return best
+
+        probe = {"left": (0, 3), "right": (7, 3), "top": (3, 0), "bottom": (3, 7)}
+        lines = [f"판 바깥을 카메라가 몇 칸까지 보는가 "
+                 f"(지금 필요한 여유 = {TOP_MARGIN_CELLS}칸):"]
+        blind = []
+        for side in ("left", "right", "top", "bottom"):
+            r = reach(side)
+            gx, gy = probe[side]
+            col, row = chess_to_grid_inv(gx, gy)
+            name = (f"랭크 {row+1}" if side in ("left", "right")
+                    else f"파일 {chr(97+col)}")
+            mark = ("✅ 충분" if r >= TOP_MARGIN_CELLS else
+                    ("△ 모자람" if r >= 0.5 else "❌ 거의 못 봄"))
+            lines.append(f"    {name} 바깥: {r:.1f}칸까지 보임  {mark}")
+            if r < 0.5:
+                blind.append(name)
+        if blind:
+            lines += [
+                f"  → {', '.join(blind)} 쪽은 카메라가 아예 못 보고 있습니다.",
+                "     그 칸에 팔이 가면 마커가 화면 밖으로 나가 정렬이 안 됩니다.",
+                "     TOP_MARGIN_CELLS 를 늘려도 소용없습니다 — 원본에 없는 화소입니다.",
+                "     → 카메라를 뒤로/위로 옮겨 판 주위가 한 칸 이상 남게 한 뒤",
+                "       python vision/auto_calibrate.py --camera N 을 다시 하세요.",
+            ]
+        return "\n".join(lines)
+
+    def marker_debug(self, frame=None) -> str:
+        """마커를 **원본 화면**에서도 찾아, 탑뷰에 왜 안 보이는지 가른다.
+
+        세 가지 실패는 고치는 방법이 완전히 다른데, 탑뷰만 봐서는 구분이
+        안 된다:
+          ① 원본에도 마커 색이 없다        → 색/조명 문제 (pick_marker)
+          ② 원본엔 있는데 탑뷰 밖으로 나간다 → 여유(TOP_MARGIN_CELLS) 부족
+          ③ 원본엔 있고 탑뷰 안인데 검다    → 카메라가 그 영역을 아예 못 본다
+                                            (판 너머가 화각 밖) → 카메라를
+                                            뒤로/위로 옮겨야 한다
+        """
+        if frame is None:
+            ok, frame = self.cap.read()
+            if not ok:
+                return "카메라 프레임을 못 읽었습니다"
+        hsv = cv2.cvtColor(apply_gamma(frame), cv2.COLOR_BGR2HSV)
+        mask = cv2.morphologyEx(self._color_mask(hsv, MARKER_HSV_RANGES),
+                                cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 원본은 탑뷰와 배율이 달라 MARKER_MIN_AREA 를 그대로 쓸 수 없다
+        cnts = [c for c in cnts if cv2.contourArea(c) >= 20]
+        if not cnts:
+            # ⚠️ '색이 안 맞아서 못 봄'과 '아예 화각 밖이라 못 봄'은 여기서
+            #    구분이 안 된다. 여유 영역이 검은지 같이 보여 판단하게 한다.
+            return ("① 원본 화면에도 마커 색이 없습니다.\n"
+                    "     → 색 문제이거나, 마커가 카메라 화각 밖입니다.\n"
+                    "     " + self.margin_report(frame).replace("\n", "\n     ") + "\n"
+                    "     여유가 ✅ 인데도 못 찾으면 색 문제입니다:\n"
+                    "       python vision/pick_marker.py --camera N  "
+                    "(랭크8 자세에서도 클릭)")
+        best = max(cnts, key=cv2.contourArea)
+        M = cv2.moments(best)
+        if M["m00"] == 0:
+            return "① 마커 덩어리를 찾았지만 중심을 계산할 수 없습니다"
+        cx, cy = M["m10"] / M["m00"], M["m01"] / M["m00"]
+        pt = cv2.perspectiveTransform(
+            np.array([[[cx, cy]]], dtype=np.float32), self._M)[0, 0]
+        u, v = px_to_grid_uv(float(pt[0]), float(pt[1]))
+        inside = 0 <= pt[0] < TOP_SIZE and 0 <= pt[1] < TOP_SIZE
+        head = (f"원본 화면에서는 마커를 찾았습니다 "
+                f"(원본 픽셀 {cx:.0f},{cy:.0f}, 면적 {cv2.contourArea(best):.0f})\n"
+                f"     탑뷰로 옮기면 픽셀 ({pt[0]:.0f},{pt[1]:.0f}) = 칸 좌표 "
+                f"({u:.2f},{v:.2f})")
+        if not inside:
+            need = max(abs(min(u, v, 0.0)), max(u - 8, v - 8, 0.0))
+            return (head + "\n"
+                    f"     ② 탑뷰 밖입니다. 지금 여유는 {TOP_MARGIN_CELLS}칸인데 "
+                    f"{need:.2f}칸이 필요합니다.\n"
+                    f"        → detect.py 의 TOP_MARGIN_CELLS 를 "
+                    f"{math.ceil((need + 0.3) * 2) / 2:g} 이상으로 올리세요.\n"
+                    "        (단 카메라가 그 영역을 실제로 봐야 합니다 — 탑뷰가 "
+                    "검게 나오면 화각 밖입니다)")
+        top = self._get_top_view(frame)
+        px, py = int(pt[0]), int(pt[1])
+        patch = top[max(0, py-3):py+4, max(0, px-3):px+4]
+        if patch.size and float(patch.max()) < 20:
+            return (head + "\n"
+                    "     ③ 탑뷰 안이지만 그 자리가 새까맣습니다 — 카메라가 판 너머를\n"
+                    "        아예 못 보고 있습니다(화각 밖). 소프트웨어로는 못 고칩니다.\n"
+                    "        → 카메라를 뒤로/위로 옮기고 "
+                    "python vision/auto_calibrate.py 를 다시 하세요.")
+        return (head + "\n"
+                "     ③ 탑뷰 안에 정상적으로 들어옵니다 → 면적 필터"
+                f"({MARKER_MIN_AREA}~{MARKER_MAX_AREA}px)에 걸린 것입니다.")
+
     def find_marker(self, frame=None) -> tuple:
         """흡착컵에 붙인 색 마커의 위치를 찾아 연속 체스 좌표 (col, row)로 반환.
 
