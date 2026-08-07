@@ -22,13 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
                              CELL_SIZE, PIECE_Z)
 
-# 허용 오차 (칸 단위). 0.0172칸 ≈ 0.5mm.
-# ⚠️ 카메라 화소 하나가 탑뷰에서 CELL_SIZE_PX=50px/칸 ≈ 0.58mm/px 이다.
-#    0.5mm 는 사실상 화소 하나 수준이라, 카메라 잡음·마커 중심 계산의
-#    반올림만으로도 이 밑으로는 안 잡힐 수 있다. 그러면 ALIGN_MAX_ITER
-#    를 다 쓰고 못 미친 채로 끝난다(위험하진 않다 — 마지막 오프셋으로
-#    진행할 뿐이다). 실측해서 계속 못 미치면 이 값을 다시 올릴 것.
-ALIGN_TOL_CELLS = 0.0172
+# 허용 오차 (칸 단위). 0.0343칸 ≈ 1.0mm.
+ALIGN_TOL_CELLS = 0.0343
 # 최대 반복 횟수. 유격 때문에 완전히 수렴하지 않을 수 있으므로 상한을 둔다.
 ALIGN_MAX_ITER = 4
 # 보정 이득. 1.0이면 측정 오차만큼 그대로 되돌린다. 진동하면 0.6~0.8로 낮춘다.
