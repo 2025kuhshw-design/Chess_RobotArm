@@ -400,7 +400,20 @@ class RealArm:
     # 램프 전송: 현재 위치 → 목표까지 조금씩 이동 (충격/스톨 방지)
     # ─────────────────────────────────────────
     def _ramp_send(self, s1: int, s2: int, s3: int, suction: bool):
-        """소프트 제한 클램프 후, RAMP_STEP_DEG씩 나눠 목표까지 부드럽게 이동."""
+        """소프트 제한 클램프 후, 목표까지 나눠서 부드럽게 이동.
+
+        ⚠️ **세 관절이 같이 출발해 같이 도착해야 한다**(관절공간 직선).
+           예전에는 관절마다 똑같이 2°씩 움직이다가 각자 목표에 닿으면 멈췄다.
+           그러면 적게 움직일 관절이 먼저 끝나고, 남은 관절이 마저 도는 동안
+           팔이 엉뚱한 자세를 지나간다. 실제로 칸 사이를 낮게 이동할 때
+           흡착컵이 체스판 **아래로 62mm까지 파고들었다**(모의 계산).
+
+             a8→c4 경로 최저 높이: 비동기 -16mm / 동기화 +25mm
+             f8→h4              : 비동기 -63mm / 동기화 +27mm
+
+           속도는 그대로다 — 가장 많이 도는 관절이 여전히 스텝당 ramp_step 만큼
+           움직이고, 나머지가 그에 비례해 천천히 따라갈 뿐이다.
+        """
         t1, t2, t3 = _clamp_safe(s1, s2, s3)
         target = [t1, t2, t3]
 
@@ -409,19 +422,21 @@ class RealArm:
             self._send_cmd(target[0], target[1], target[2], suction)
             return
 
-        while True:
-            moved = False
-            for j in range(3):
-                if self._cur[j] < target[j]:
-                    self._cur[j] = min(target[j], self._cur[j] + self.ramp_step)
-                    moved = True
-                elif self._cur[j] > target[j]:
-                    self._cur[j] = max(target[j], self._cur[j] - self.ramp_step)
-                    moved = True
+        start = list(self._cur)
+        delta = [target[j] - start[j] for j in range(3)]
+        biggest = max(abs(d) for d in delta)
+        if biggest == 0:
+            # 위치는 그대로 두고 흡착 상태만 갱신 (자세 유지용 호출)
+            self._send_cmd(start[0], start[1], start[2], suction)
+            return
+
+        n = max(1, math.ceil(biggest / self.ramp_step))
+        for i in range(1, n + 1):
+            self._cur = [int(round(start[j] + delta[j] * i / n)) for j in range(3)]
             self._send_cmd(self._cur[0], self._cur[1], self._cur[2], suction)
-            if not moved:
-                break
-            time.sleep(self.ramp_delay)
+            if i < n:
+                time.sleep(self.ramp_delay)
+        self._cur = list(target)
 
     # ─────────────────────────────────────────
     # 메서드: move (관절각 → 실행)

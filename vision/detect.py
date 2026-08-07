@@ -13,8 +13,33 @@ import time
 # 하이퍼파라미터 / 상수
 # ─────────────────────────────────────────
 CALIB_PATH   = os.path.join(os.path.dirname(__file__), "calibration.json")
-TOP_SIZE     = 400        # 탑뷰 이미지 크기 (px)
-CELL_SIZE_PX = TOP_SIZE // 8   # 한 셀 크기 (px)
+CELL_SIZE_PX = 50                      # 한 칸 크기 (px)
+BOARD_PX     = 8 * CELL_SIZE_PX        # 체스판 8x8 영역 (px)
+
+# ─────────────────────────────────────────
+# 판 바깥 여유 — 없으면 가장자리 칸에서 마커를 못 본다
+# ─────────────────────────────────────────
+# ⚠️ 예전에는 탑뷰를 **체스판 딱 그 영역만** 잘라냈다. 그런데 흡착컵 마커는
+#    판보다 위에 떠 있어 시차로 바깥쪽으로 밀려 보인다. 그래서 a·h 파일이나
+#    8랭크 같은 가장자리 칸에 가면 마커가 잘린 영역 밖으로 나가 **아예 안
+#    보이고, 그러면 보정 자체가 안 됐다**(실제로 겪음).
+# 판 둘레로 이만큼 더 펴서 마커가 화면 안에 남게 한다. 격자 번호와 칸 좌표는
+# 그대로다 — 원점만 MARGIN_PX 만큼 밀린다.
+TOP_MARGIN_CELLS = 1.5
+MARGIN_PX    = int(round(TOP_MARGIN_CELLS * CELL_SIZE_PX))
+TOP_SIZE     = BOARD_PX + 2 * MARGIN_PX    # 탑뷰 전체 크기 (px)
+
+
+def cell_px(gx: float, gy: float) -> tuple:
+    """격자 좌표 (gx,gy) 의 좌상단 픽셀. 여유(MARGIN_PX)를 더해 준다."""
+    return (int(round(MARGIN_PX + gx * CELL_SIZE_PX)),
+            int(round(MARGIN_PX + gy * CELL_SIZE_PX)))
+
+
+def px_to_grid_uv(px: float, py: float) -> tuple:
+    """탑뷰 픽셀 → 격자 좌표(칸 단위). cell_px 의 역변환."""
+    return ((px - MARGIN_PX) / CELL_SIZE_PX,
+            (py - MARGIN_PX) / CELL_SIZE_PX)
 
 # 기물 분류 임계값
 # 빈 칸일 때의 밝기와 이만큼(0~255) 넘게 차이 나면 기물이 있다고 본다.
@@ -344,11 +369,11 @@ class ChessBoardDetector:
         with open(path) as f:
             data = json.load(f)
         corners = np.array(data["corners"], dtype=np.float32)
+        # 판의 네 꼭짓점을 '여유를 뺀 안쪽 사각형'에 맞춘다.
+        # 그러면 판 바깥도 MARGIN_PX 만큼 같이 펴져서 마커가 안 잘린다.
+        lo, hi = MARGIN_PX, MARGIN_PX + BOARD_PX - 1
         dst = np.array([
-            [0,           0          ],
-            [TOP_SIZE-1,  0          ],
-            [TOP_SIZE-1,  TOP_SIZE-1 ],
-            [0,           TOP_SIZE-1 ],
+            [lo, lo], [hi, lo], [hi, hi], [lo, hi],
         ], dtype=np.float32)
         self._M = cv2.getPerspectiveTransform(corners, dst)
         print(f"[Detector] 캘리브레이션 로드: {path}")
@@ -373,8 +398,8 @@ class ChessBoardDetector:
     @staticmethod
     def _cell_patch(top: np.ndarray, gx: int, gy: int) -> np.ndarray:
         """격자 (gx,gy) 셀 중앙 60% 의 흑백 패치."""
-        cell = top[gy*CELL_SIZE_PX:(gy+1)*CELL_SIZE_PX,
-                   gx*CELL_SIZE_PX:(gx+1)*CELL_SIZE_PX]
+        x0, y0 = cell_px(gx, gy)
+        cell = top[y0:y0+CELL_SIZE_PX, x0:x0+CELL_SIZE_PX]
         m = int(CELL_SIZE_PX * 0.2)
         return cv2.cvtColor(cell[m:-m, m:-m], cv2.COLOR_BGR2GRAY).astype(np.float32)
 
@@ -449,8 +474,9 @@ class ChessBoardDetector:
         fb = np.zeros((8, 8), np.float32)
         for gy in range(8):
             for gx in range(8):
-                sl = (slice(gy*CELL_SIZE_PX + m0, (gy+1)*CELL_SIZE_PX - m0),
-                      slice(gx*CELL_SIZE_PX + m0, (gx+1)*CELL_SIZE_PX - m0))
+                x0, y0 = cell_px(gx, gy)
+                sl = (slice(y0 + m0, y0 + CELL_SIZE_PX - m0),
+                      slice(x0 + m0, x0 + CELL_SIZE_PX - m0))
                 fw[gy, gx] = (mw[sl] > 0).mean()
                 fb[gy, gx] = (mb[sl] > 0).mean()
         return fw, fb
@@ -571,8 +597,8 @@ class ChessBoardDetector:
         out = np.zeros((8, 8), dtype=np.float32)
         for gy in range(8):
             for gx in range(8):
-                cell = top[gy*CELL_SIZE_PX:(gy+1)*CELL_SIZE_PX,
-                           gx*CELL_SIZE_PX:(gx+1)*CELL_SIZE_PX]
+                x0, y0 = cell_px(gx, gy)
+                cell = top[y0:y0+CELL_SIZE_PX, x0:x0+CELL_SIZE_PX]
                 out[gy, gx] = self._cell_mean(cell)
         return out
 
@@ -874,8 +900,9 @@ class ChessBoardDetector:
 
         # 격자선
         for i in range(1, 8):
-            cv2.line(top, (i*CELL_SIZE_PX, 0), (i*CELL_SIZE_PX, TOP_SIZE), (0,255,0), 1)
-            cv2.line(top, (0, i*CELL_SIZE_PX), (TOP_SIZE, i*CELL_SIZE_PX), (0,255,0), 1)
+            gx0, gy0 = cell_px(i, i)
+            cv2.line(top, (gx0, MARGIN_PX), (gx0, MARGIN_PX+BOARD_PX), (0,255,0), 1)
+            cv2.line(top, (MARGIN_PX, gy0), (MARGIN_PX+BOARD_PX, gy0), (0,255,0), 1)
 
         # 기물 표시 (board는 체스 좌표 → 화면 위치로 변환)
         if board:
@@ -883,8 +910,9 @@ class ChessBoardDetector:
                 for col in range(8):
                     state = board[row][col]
                     gx, gy = chess_to_grid(col, row)
-                    cx = gx * CELL_SIZE_PX + CELL_SIZE_PX // 2
-                    cy = gy * CELL_SIZE_PX + CELL_SIZE_PX // 2
+                    _x0, _y0 = cell_px(gx, gy)
+                    cx = _x0 + CELL_SIZE_PX // 2
+                    cy = _y0 + CELL_SIZE_PX // 2
                     if state == "white":
                         cv2.circle(top, (cx, cy), 15, (255,255,255), -1)
                         cv2.circle(top, (cx, cy), 15, (0,0,0), 1)
@@ -896,8 +924,7 @@ class ChessBoardDetector:
             for row in range(8):
                 for col in range(8):
                     gx, gy = chess_to_grid(col, row)
-                    x1 = gx * CELL_SIZE_PX
-                    y1 = gy * CELL_SIZE_PX
+                    x1, y1 = cell_px(gx, gy)
                     # 체스 표기: col→파일(a-h), row→랭크(1-8)
                     notation = f"{chr(ord('a') + col)}{row + 1}"
 
@@ -944,6 +971,9 @@ class ChessBoardDetector:
                         "left": "ROBOT <", "right": "> ROBOT"}[ROBOT_SIDE]
             pos = {"bottom": (5, TOP_SIZE-6), "top": (5, 16),
                    "left": (5, TOP_SIZE//2), "right": (TOP_SIZE-95, TOP_SIZE//2)}[ROBOT_SIDE]
+            # 판 경계를 그려 '여유 영역'을 눈으로 구분할 수 있게
+            cv2.rectangle(top, (MARGIN_PX, MARGIN_PX),
+                          (MARGIN_PX+BOARD_PX-1, MARGIN_PX+BOARD_PX-1), (0,255,0), 2)
             cv2.putText(top, side_txt, pos,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, ORIGIN_COLOR, 2)
 
@@ -1006,7 +1036,7 @@ class ChessBoardDetector:
         #  있는 것처럼 보였다 — 디버깅할 때 오해를 부른다)
         self._last_marker_px = (px, py)
         self._last_marker_cnt = best
-        c, r = grid_uv_to_colrow(px / CELL_SIZE_PX, py / CELL_SIZE_PX)
+        c, r = grid_uv_to_colrow(*px_to_grid_uv(px, py))
         # 마커가 보이는 위치 → 흡착컵의 실제 위치 (시차·오프셋 보정)
         return apply_marker_fit(c, r)
 

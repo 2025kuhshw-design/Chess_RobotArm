@@ -35,7 +35,8 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from vision.detect import (ChessBoardDetector, CELL_SIZE_PX,
+from vision.detect import (ChessBoardDetector, CELL_SIZE_PX, MARGIN_PX,
+                           BOARD_PX, cell_px,
                            PIECE_COLOR_MIN_FRAC, MARKER_HSV_RANGES,
                            save_colors, COLORS_PATH)
 
@@ -142,21 +143,25 @@ def main():
                 n = 0
                 for gy in range(8):
                     for gx in range(8):
-                        sl = (slice(gy*CELL_SIZE_PX+m0, (gy+1)*CELL_SIZE_PX-m0),
-                              slice(gx*CELL_SIZE_PX+m0, (gx+1)*CELL_SIZE_PX-m0))
+                        _x0, _y0 = cell_px(gx, gy)
+                        sl = (slice(_y0+m0, _y0+CELL_SIZE_PX-m0),
+                              slice(_x0+m0, _x0+CELL_SIZE_PX-m0))
                         if (mask[sl] > 0).mean() >= PIECE_COLOR_MIN_FRAC:
                             n += 1
                 counts[key] = n
 
-            for i in range(1, 8):     # 격자선
-                cv2.line(disp, (i*CELL_SIZE_PX, 0), (i*CELL_SIZE_PX, 400), (0,0,0), 1)
-                cv2.line(disp, (0, i*CELL_SIZE_PX), (400, i*CELL_SIZE_PX), (0,0,0), 1)
+            for i in range(1, 8):     # 격자선 (판 영역 안에만)
+                gx0, gy0 = cell_px(i, i)
+                cv2.line(disp, (gx0, MARGIN_PX), (gx0, MARGIN_PX+BOARD_PX), (0,0,0), 1)
+                cv2.line(disp, (MARGIN_PX, gy0), (MARGIN_PX+BOARD_PX, gy0), (0,0,0), 1)
+            cv2.rectangle(disp, (MARGIN_PX, MARGIN_PX),
+                          (MARGIN_PX+BOARD_PX-1, MARGIN_PX+BOARD_PX-1), (0,0,0), 2)
 
             side = "WHITE side" if target[0] == "w" else "BLACK side"
             cv2.putText(disp, f"picking: {side}", (5, 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             txt = f"cells  white={counts.get('w','-')}  black={counts.get('b','-')}"
-            cv2.putText(disp, txt + "  (16 each = OK)", (5, 392),
+            cv2.putText(disp, txt + "  (16 each = OK)", (5, disp.shape[0]-8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1)
 
             cv2.imshow(WIN, disp)
