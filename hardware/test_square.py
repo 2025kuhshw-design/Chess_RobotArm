@@ -511,9 +511,30 @@ def main():
                             res.append(math.hypot(pc-ttc, pr-ttr) * 29.125)
                         print(f"  {len(markcal_pts)}점으로 계산: 잔차 평균 "
                               f"{sum(res)/len(res):.1f}mm, 최대 {max(res):.1f}mm")
+                        # ⚠️ 평균·최대만 보면 '어느 칸이 나쁜지'를 모른다.
+                        #    실제로 랭크 7·8 에서만 크게 틀어지는 일이 있었다.
+                        named = [(f"{'abcdefgh'[int(m[2])]}{int(m[3])+1}", r,
+                                  int(m[3]) + 1)
+                                 for m, r in zip(markcal_pts, res)]
+                        worst = sorted(named, key=lambda t: -t[1])[:5]
+                        print("  잔차가 큰 칸: " +
+                              ", ".join(f"{n} {r:.1f}mm" for n, r, _ in worst))
+                        near = [r for _, r, rk in named if rk >= 7]
+                        far = [r for _, r, rk in named if rk <= 6]
+                        if near and far:
+                            mn, mf = sum(near)/len(near), sum(far)/len(far)
+                            print(f"  랭크 7~8 평균 {mn:.1f}mm  vs  랭크 1~6 평균 "
+                                  f"{mf:.1f}mm")
+                            if mn > mf * 1.8 and mn > 4:
+                                print("  ⚠️ 로봇 쪽(랭크 7~8)에서만 크게 틀어집니다.")
+                                print("     이건 시차가 아니라 **팔 자체의 위치 오차**일")
+                                print("     가능성이 큽니다. markcal 은 카메라 보정이라")
+                                print("     팔의 계통 오차는 못 고칩니다(오히려 그대로")
+                                print("     남습니다). 자로 재는 보정을 쓰세요:")
+                                print("       python hardware/calibrate_board.py --port <포트>")
                         if max(res) > 8:
-                            print("  ⚠️ 잔차가 큽니다. 흡착컵을 칸 중심에 정확히"
-                                  " 맞췄는지, 점들이 한 줄로 늘어서 있지 않은지 확인")
+                            print("  ⚠️ 잔차가 큽니다. 점들이 한 줄로 늘어서 있지"
+                                  " 않은지, 마커를 제대로 잡았는지 확인하세요")
                         vd.save_colors(marker_fit=fit, marker_offset=(0.0, 0.0))
                         print(f"  저장 완료 → {vd.COLORS_PATH} (바로 적용됨)")
                         print("  확인: 'mark' 로 흡착컵 실제 위치와 맞는지 보세요")
