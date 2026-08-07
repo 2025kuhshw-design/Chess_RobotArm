@@ -54,8 +54,12 @@ def main():
     ap.add_argument("--gamma", type=float, default=None,
                     help="감마를 이 값으로 바꿔 시험 (저장은 안 함). 기준 영상은 "
                          "찍을 때의 감마로 고정되므로 --capture-empty 와 같이 쓸 것")
+    ap.add_argument("--exposure", type=float, default=None,
+                    help="카메라 노출을 이 값으로 고정해 시험 (저장은 안 함)")
     args = ap.parse_args()
 
+    if args.exposure is not None:
+        vd.CAM_EXPOSURE = args.exposure
     if args.gamma is not None:
         vd.set_gamma(args.gamma)
     if args.thresh is not None:

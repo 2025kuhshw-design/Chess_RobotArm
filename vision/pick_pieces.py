@@ -24,9 +24,24 @@
   2  → **검은쪽 기물** 윗면을 클릭
   3  → **판**(기물 없는 칸)을 클릭 — 여기에 들어가면 안 되는 색
   b  → 시작 배치라면 랭크 3~6(빈 칸 32개)을 음성 표본으로 자동 수집  ★추천
+  - = → 카메라 **노출** 내리기 / 올리기   ★ 감마보다 먼저 이걸 맞출 것
+  a  → 자동노출로 되돌리기
   [ ] → 감마 -0.1 / +0.1  (어둡게 하면 채도 대비가 커진다)
   s  vision/colors.json 에 저장하고 색 방식을 켠다
   r  초기화   q  저장 없이 종료
+
+★ 이걸 먼저 하고 오세요 — 노출·화이트밸런스 고정:
+      python vision/lock_camera.py --camera 1
+  자동 화이트밸런스는 화면 평균을 무채색으로 맞추려 한다. 이 판은 대부분이
+  베이지(카페라떼)색이라 AWB 가 그 색조를 통째로 상쇄해 **밝은 칸을 흰색으로**
+  만들어 버린다(실측: 밝은 칸 채도가 3까지 떨어짐, 나무색이면 80 근처).
+  그렇게 되면 흰 기물과 색이 같아져 **어떤 임계값·감마로도 못 가른다.**
+
+★ 순서 — **노출/화이트밸런스 먼저, 감마 나중**:
+  화면 위 `sat light` 가 60 이상이면 좋다. 20 아래면 판이 무채색으로 찍히는
+  중이니 색 등록을 해도 소용없다 — lock_camera 부터 돌려야 한다.
+  `clip` 은 255에 붙어버린 픽셀 비율이다. 여기 붙은 픽셀은 감마로 못 살린다:
+  (255/255)^g = 255 이라 아무리 어둡게 해도 그대로 255다.
 
 화면에서 흰쪽은 초록, 검은쪽은 파랑으로 칠해진다.
 **기물 윗면만** 칠해지고 판은 안 칠해지면 성공. 아래 줄이 16/16 이면 완성.
@@ -50,7 +65,7 @@ from vision.detect import (ChessBoardDetector, CELL_SIZE_PX, MARGIN_PX,
                            save_colors, COLORS_PATH)
 
 WIN = ("pick pieces  (1=white 2=black 3=board  b=auto-board  "
-       "[ ]=gamma  s=save r=reset q=quit)")
+       "-/= exposure  a=auto  [ ]=gamma  s=save r=reset q=quit)")
 SAMPLE = 5                       # 클릭 지점 주변 표본 크기 (홀수)
 
 # 상자를 넓힐 후보 폭. 음성 표본이 안 들어가는 선에서 가장 큰 조합을 고른다.
@@ -59,6 +74,11 @@ PAD_CANDIDATES = (70, 55, 40, 30, 24, 18, 14, 10, 8, 6, 4, 2, 0)
 CORE_PCT = (2, 98)
 # 그래도 음성이 들어가면 더 세게 잘라 본다.
 FALLBACK_PCT = ((5, 95), (10, 90), (20, 80), (30, 70))
+# 음성 픽셀이 이 비율까지는 들어와도 된다.
+# 완전히 0을 요구하면 잡음 픽셀 하나 때문에 상자가 확 쪼그라든다.
+# 칸 판정은 중앙의 8%(PIECE_COLOR_MIN_FRAC)가 넘어야 기물이라 하고 그 전에
+# 모폴로지 열기로 흩어진 점은 지워지므로, 0.2% 는 칸 판정을 못 뒤집는다.
+NEG_TOL_FRAC = 0.002
 HSV_MAX = np.array([179.0, 255.0, 255.0])
 
 
@@ -84,6 +104,7 @@ def fit_range(pos, neg):
        안 넓힌다. 판정 상자가 판 색에 닿는 순간을 자동으로 감지한다.
     """
     neg = np.asarray(neg, dtype=float) if len(neg) else np.zeros((0, 3))
+    budget = int(len(neg) * NEG_TOL_FRAC)
 
     for pct in (CORE_PCT,) + FALLBACK_PCT:
         lo0, hi0 = _box(pos, pct)
@@ -94,7 +115,7 @@ def fit_range(pos, neg):
                     pad = np.array([ph, ps, pv], dtype=float)
                     lo = np.maximum(0.0, lo0 - pad)
                     hi = np.minimum(HSV_MAX, hi0 + pad)
-                    if _n_inside(lo, hi, neg):
+                    if _n_inside(lo, hi, neg) > budget:
                         continue
                     score = ph + ps + pv
                     if best is None or score > best[0]:
@@ -103,9 +124,11 @@ def fit_range(pos, neg):
                 break          # H를 최대로 넓히고도 통과 — 더 볼 필요 없음
         if best is not None:
             _, lo, hi, pads = best
+            # 허용 오차 안이므로 문제 없음(leak=0). 실패했을 때만 실제 수를 낸다.
             return _as_int(lo), _as_int(hi), pads, 0
 
     # 여기까지 왔다면 기물 색과 판 색이 HSV 상에서 진짜로 겹친다.
+    # 보통 원인은 하나다 — 판이 노출 과다로 하얗게 타서 채도가 0이 된 것.
     lo0, hi0 = _box(pos, FALLBACK_PCT[-1])
     return _as_int(lo0), _as_int(hi0), (0, 0, 0), _n_inside(lo0, hi0, neg)
 
@@ -131,7 +154,7 @@ def warn_marker_clash(rw, rb):
                 print("       pick_marker.py 로 마커 색을 바꾸세요.")
 
 
-def write_colors(rw, rb, gamma):
+def write_colors(rw, rb, gamma, exposure):
     """실측한 기물 색을 vision/colors.json 에 저장하고 색 방식을 켠다.
 
     ⚠️ detect.py 를 직접 고치지 않는다. detect.py 는 git이 추적하는 파일이라
@@ -140,9 +163,10 @@ def write_colors(rw, rb, gamma):
     """
     save_colors(white=[rw] if rw else [],
                 black=[rb] if rb else [],
-                color_mode=True, gamma=gamma)
+                color_mode=True, gamma=gamma, cam_exposure=exposure)
     print(f"  저장 완료 → {COLORS_PATH}")
     print(f"    PIECE_COLOR_MODE = True")
+    print(f"    노출   {'자동' if exposure is None else exposure}")
     print(f"    감마   {gamma:.2f}")
     print(f"    흰쪽   {rw}")
     print(f"    검은쪽 {rb}")
@@ -172,9 +196,58 @@ def harvest_empty_cells(hsv):
     return np.concatenate(out).tolist()
 
 
+def clip_fraction(frame, det):
+    """판 위에서 **255에 붙어버린** 픽셀의 비율. 밝은 칸/어두운 칸 각각.
+
+    감마 이전의 원본으로 재야 한다 — 감마는 255를 255로 그대로 보내므로
+    감마 건 그림으로 재도 값은 같지만, 원본으로 재는 편이 뜻이 분명하다.
+    """
+    raw = cv2.warpPerspective(frame, det._M, (vd.TOP_SIZE, vd.TOP_SIZE))
+    m0 = int(CELL_SIZE_PX * 0.2)
+    vals = []
+    for gy in range(8):
+        for gx in range(8):
+            x0, y0 = cell_px(gx, gy)
+            p = raw[y0+m0:y0+CELL_SIZE_PX-m0, x0+m0:x0+CELL_SIZE_PX-m0]
+            vals.append((float(p.mean()), float((p.max(axis=2) >= 253).mean())))
+    vals.sort()
+    half = len(vals) // 2
+    dark = float(np.mean([v[1] for v in vals[:half]])) * 100
+    light = float(np.mean([v[1] for v in vals[half:]])) * 100
+    return light, dark
+
+
+def light_cell_saturation(hsv):
+    """밝은 칸(위쪽 절반)의 채도 중앙값.
+
+    이게 바닥이면 판이 무채색으로 찍히고 있다는 뜻이고, 그러면 흰 기물과
+    원리상 구분이 안 된다. 색을 아무리 잘 골라도 소용없으므로 먼저 본다.
+    """
+    m0 = int(CELL_SIZE_PX * 0.2)
+    cells = []
+    for gy in range(8):
+        for gx in range(8):
+            x0, y0 = cell_px(gx, gy)
+            p = hsv[y0+m0:y0+CELL_SIZE_PX-m0,
+                    x0+m0:x0+CELL_SIZE_PX-m0].reshape(-1, 3)
+            med = np.median(p, axis=0)
+            cells.append((med[2], med[1]))
+    cells.sort()
+    return float(np.median([c[1] for c in cells[len(cells)//2:]]))
+
+
+def exposure_step(v, up):
+    """드라이버마다 노출 값의 단위가 달라서(-6 같은 로그값 vs 78 같은 원값)
+    크기에 맞춰 걸음폭을 정한다."""
+    s = 1.0 if abs(v) < 20 else max(1.0, round(abs(v) * 0.15))
+    return v + (s if up else -s)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", type=int, default=1)
+    ap.add_argument("--exposure", type=float, default=None,
+                    help="시작 노출 (기본: colors.json 값, 없으면 자동노출)")
     ap.add_argument("--gamma", type=float, default=None,
                     help="시작 감마 (기본: colors.json 값). 1보다 크면 어두워지고 "
                          "채도 대비가 커진다")
@@ -182,8 +255,11 @@ def main():
 
     if args.gamma is not None:
         vd.set_gamma(args.gamma)
+    if args.exposure is not None:
+        vd.CAM_EXPOSURE = args.exposure
 
     det = ChessBoardDetector(camera_index=args.camera)
+    expo = [vd.CAM_EXPOSURE]      # None = 자동노출
     samples = {"w": [], "b": [], "n": []}
     target = ["w"]
     param = [None]
@@ -262,6 +338,19 @@ def main():
             cv2.putText(disp, f"picking: {side}   gamma {vd.GAMMA:.2f}   "
                               f"neg {len(samples['n'])}", (5, 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cl, cd = clip_fraction(frame, det)
+            sat = light_cell_saturation(hsv)
+            exp_txt = "auto" if expo[0] is None else f"{expo[0]:g}"
+            bad = cl >= 1 or sat < 20
+            cv2.putText(disp, f"exposure {exp_txt}   clip {cl:4.1f}%   "
+                              f"sat light {sat:3.0f}   "
+                              f"(clip 0%, sat>60 = OK)", (5, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        (0, 0, 255) if bad else (0, 180, 0), 2)
+            if sat < 20:
+                cv2.putText(disp, "board looks GRAY -> run lock_camera.py",
+                            (5, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (0, 0, 255), 2)
             leak = sum(f[3] for f in fitted.values())
             txt = (f"cells  white={counts.get('w','-')}  black={counts.get('b','-')}"
                    f"  (16 each = OK)")
@@ -285,6 +374,24 @@ def main():
                 print(f"  빈 칸 32개에서 음성 표본 수집 → 총 "
                       f"{len(samples['n'])}개")
                 print("  (시작 배치가 아니면 r 로 초기화하고 3 으로 직접 클릭하세요)")
+            if k in (ord('-'), ord('=')) or k == ord('+'):
+                base = expo[0]
+                if base is None:      # 자동노출이면 지금 값에서 출발
+                    base = det.cap.get(cv2.CAP_PROP_EXPOSURE) or 100.0
+                expo[0] = exposure_step(base, k != ord('-'))
+                vd.apply_camera_controls(det.cap, expo[0],
+                                         wb_temp=vd.CAM_WB_TEMP, verbose=False)
+                for _ in range(5):
+                    det.cap.read()      # 새 노출이 반영될 때까지
+                samples["w"].clear(); samples["b"].clear(); samples["n"].clear()
+                print(f"  노출 {expo[0]:g} — 밝기가 바뀌었으므로 표본을 비웠습니다")
+            if k == ord('a'):
+                expo[0] = None
+                for v in (3, 0.75):     # 드라이버마다 '자동'을 뜻하는 값이 다르다
+                    if det.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, v):
+                        break
+                samples["w"].clear(); samples["b"].clear(); samples["n"].clear()
+                print("  자동노출로 되돌렸습니다 (표본 비움)")
             if k in (ord('['), ord(']')):
                 g = max(0.4, min(3.0, vd.GAMMA + (0.1 if k == ord(']') else -0.1)))
                 vd.set_gamma(g)
@@ -326,8 +433,18 @@ def main():
                         rw = (lo, hi)
                     else:
                         rb = (lo, hi)
+                cl, _cd = clip_fraction(frame, det)
+                if cl >= 1:
+                    print(f"  ⚠️ 밝은 칸의 {cl:.1f}% 가 아직 255에 붙어 있습니다.")
+                    print("     그 픽셀은 채도가 0 이라 흰 기물과 원리상 구분이 "
+                          "안 됩니다.")
+                    print("     - 키로 노출을 더 내린 뒤 다시 고르는 편이 좋습니다.")
+                if expo[0] is None:
+                    print("  ⚠️ 자동노출 상태로 저장합니다 — 노출이 계속 움직여서")
+                    print("     방금 맞춘 색이 다음 실행 때 안 맞을 수 있습니다.")
+                    print("     - / = 로 노출을 고정하는 것을 권합니다.")
                 warn_marker_clash(rw, rb)
-                if write_colors(rw, rb, vd.GAMMA):
+                if write_colors(rw, rb, vd.GAMMA, expo[0]):
                     print("  확인: python vision/check_board.py "
                           f"--camera {args.camera}")
                     if abs(vd.GAMMA - 1.0) > 1e-3:

@@ -204,6 +204,64 @@ def apply_gamma(img: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────
+# 카메라 노출 고정 — 감마보다 먼저 해야 하는 것
+# ─────────────────────────────────────────
+# ⚠️ 감마는 **이미 찍힌 픽셀**에 거는 후처리다. 밝은 칸이 노출 과다로
+#    255에 붙어(clipping) 있으면 (255/255)^g = 255 라서 감마를 아무리 올려도
+#    영원히 흰색이다. 정보가 센서 단계에서 이미 지워졌기 때문이다.
+#    → 이때는 **카메라 노출 자체를 낮춰야** 한다.
+#
+# 자동노출을 켜 두면 또 다른 문제가 있다. 노출이 계속 움직여서 방금 연
+# 프로그램과 계속 돌던 프로그램이 서로 다른 색을 본다(실제로 겪음:
+# --watch 는 64/64, 한 장만 읽으면 48/64).
+# 노출을 고정하면 두 문제가 한 번에 사라진다.
+#
+# 값은 드라이버마다 뜻이 다르다(어떤 건 -6 같은 로그값, 어떤 건 78 같은 원값).
+# 그래서 절대값을 정해두지 않고, pick_pieces 에서 눈으로 맞춘 값을
+# colors.json 에 저장해 모든 도구가 같이 쓴다.
+# ⚠️ 그리고 자동 **화이트밸런스**가 더 고약하다. AWB 는 화면 평균을 무채색으로
+#    맞추려 한다. 그런데 이 판은 대부분이 베이지(카페라떼)색이라, AWB 가 그
+#    색조를 통째로 상쇄해서 **밝은 칸을 흰색으로 만들어 버린다**.
+#    실측 역산: 감마 3.0 에서 밝은 칸 HSV=(50,9,226) → 센서 원본 V≈245 S≈3.
+#    나무색이라면 S≈83 이어야 하는데 S≈3, 즉 채널이 거의 같은 무채색이다.
+#    이래서는 흰 기물과 원리상 구분할 수 없다. 감마로도 못 고친다(S를 곱해
+#    키워도 3 은 거의 0 이다).
+CAM_EXPOSURE = None       # None = 자동노출 그대로
+CAM_GAIN = None
+CAM_WB_TEMP = None        # None = 자동 화이트밸런스 그대로
+# V4L2 계열은 '수동'을 나타내는 값이 드라이버마다 1 또는 0.25 다. 둘 다 시도한다.
+_MANUAL_EXPOSURE_VALUES = (1, 0.25, 0)
+AUTO_EXPOSURE_VALUES = (3, 0.75)
+
+
+def apply_camera_controls(cap, exposure=None, gain=None, wb_temp=None,
+                          verbose=True):
+    """노출·게인·화이트밸런스를 고정한다. 카메라가 안 받아 주면 넘어간다.
+
+    ⚠️ UVC 웹캠 중에는 이 속성들을 무시하는 것이 많다. 반영됐는지 되읽어
+       확인하고, 안 되면 그렇다고 말한다(조용히 실패하면 원인을 못 찾는다).
+    """
+    done = []
+    if exposure is not None:
+        for v in _MANUAL_EXPOSURE_VALUES:
+            if cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, v):
+                break
+        cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure))
+        done.append(f"노출 {exposure:g} → 실제 {cap.get(cv2.CAP_PROP_EXPOSURE):g}")
+    if gain is not None:
+        cap.set(cv2.CAP_PROP_GAIN, float(gain))
+        done.append(f"게인 {gain:g}")
+    if wb_temp is not None:
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        cap.set(cv2.CAP_PROP_WB_TEMPERATURE, float(wb_temp))
+        done.append(f"화이트밸런스 {wb_temp:g}K → 실제 "
+                    f"{cap.get(cv2.CAP_PROP_WB_TEMPERATURE):g}")
+    if done and verbose:
+        print("[Detector] 카메라 고정: " + ", ".join(done))
+    return bool(done)
+
+
+# ─────────────────────────────────────────
 # 실측한 색 설정 (vision/colors.json)
 # ─────────────────────────────────────────
 # ⚠️ 색은 조명·카메라·기물마다 다르므로 **설치 환경마다 다른 값**이다.
@@ -225,6 +283,7 @@ def load_colors(path: str = None) -> bool:
     """colors.json 이 있으면 색 설정을 그 값으로 바꾼다. 반환: 로드했는가."""
     global MARKER_HSV_RANGES, PIECE_HSV_WHITE, PIECE_HSV_BLACK, PIECE_COLOR_MODE
     global MARKER_OFFSET_COL, MARKER_OFFSET_ROW, MARKER_FIT
+    global CAM_EXPOSURE, CAM_GAIN, CAM_WB_TEMP
     path = path or COLORS_PATH
     if not os.path.exists(path):
         return False
@@ -248,11 +307,18 @@ def load_colors(path: str = None) -> bool:
         MARKER_FIT = [float(v) for v in d["marker_fit"]] if d["marker_fit"] else None
     if "gamma" in d:
         set_gamma(d["gamma"])
+    if "cam_exposure" in d:
+        CAM_EXPOSURE = d["cam_exposure"]
+    if "cam_gain" in d:
+        CAM_GAIN = d["cam_gain"]
+    if "cam_wb" in d:
+        CAM_WB_TEMP = d["cam_wb"]
     return True
 
 
 def save_colors(marker=None, white=None, black=None, color_mode=None,
                 marker_offset=None, marker_fit=None, gamma=None,
+                cam_exposure=..., cam_gain=..., cam_wb=...,
                 path: str = None):
     """colors.json 에 색 설정을 저장한다. None 인 항목은 기존 값을 유지."""
     path = path or COLORS_PATH
@@ -277,6 +343,13 @@ def save_colors(marker=None, white=None, black=None, color_mode=None,
         d["marker_fit"] = [float(v) for v in marker_fit] if marker_fit else None
     if gamma is not None:
         d["gamma"] = float(gamma)
+    # ⚠️ 노출은 None(자동) 도 뜻이 있는 값이라, '안 건드림'을 ... 로 구분한다
+    if cam_exposure is not ...:
+        d["cam_exposure"] = None if cam_exposure is None else float(cam_exposure)
+    if cam_gain is not ...:
+        d["cam_gain"] = None if cam_gain is None else float(cam_gain)
+    if cam_wb is not ...:
+        d["cam_wb"] = None if cam_wb is None else float(cam_wb)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
     load_colors(path)          # 방금 저장한 값을 바로 반영
@@ -390,6 +463,8 @@ class ChessBoardDetector:
         self._last_means = None
         self._last_frac = None
         self._load_empty_ref()
+        apply_camera_controls(self.cap, CAM_EXPOSURE, CAM_GAIN,
+                              CAM_WB_TEMP)
         self._warmup()
         print(f"[Detector] 카메라 {camera_index} 초기화 완료")
 
@@ -410,8 +485,10 @@ class ChessBoardDetector:
             if not ok:
                 continue
             used += 1
-            m = float(f[::8, ::8].mean())
-            if prev is not None and abs(m - prev) < tol:
+            # ⚠️ 전체 평균만 보면 부족하다. 화이트밸런스는 평균 밝기가 멈춘
+            #    뒤에도 계속 움직여서 색이 바뀐다. 채널별로 본다.
+            m = f[::8, ::8].reshape(-1, 3).mean(axis=0)
+            if prev is not None and float(np.abs(m - prev).max()) < tol:
                 stable += 1
                 if stable >= settle and used >= WARMUP_FRAMES:
                     break
@@ -788,14 +865,20 @@ class ChessBoardDetector:
         """
         top = getattr(self, "_last_top", None)
         out = ["",
-               f"  감마 {GAMMA:.2f}",
+               f"  감마 {GAMMA:.2f}   노출 "
+               f"{'자동' if CAM_EXPOSURE is None else CAM_EXPOSURE}"
+               f"   화이트밸런스 "
+               f"{'자동' if CAM_WB_TEMP is None else CAM_WB_TEMP}",
                f"  등록된 흰쪽 범위   {PIECE_HSV_WHITE}",
                f"  등록된 검은쪽 범위 {PIECE_HSV_BLACK}"]
         if top is None:
             return out
         hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
         m0 = int(CELL_SIZE_PX * 0.2)
-        groups = {"밝은 칸": [], "어두운 칸": []}
+        # ⚠️ 밝은 칸/어두운 칸을 격자 홀짝으로 정하면 안 된다. 어느 홀짝이
+        #    밝은 칸인지는 판을 어느 방향으로 놨느냐에 따라 뒤집힌다.
+        #    실제로 재서 밝기 순으로 가른다.
+        cells = []
         for gy in range(8):
             for gx in range(8):
                 if expect is not None:
@@ -805,27 +888,64 @@ class ChessBoardDetector:
                 x0, y0 = cell_px(gx, gy)
                 patch = hsv[y0+m0:y0+CELL_SIZE_PX-m0,
                             x0+m0:x0+CELL_SIZE_PX-m0].reshape(-1, 3)
-                key = "밝은 칸" if (gx + gy) % 2 == 0 else "어두운 칸"
-                groups[key].append(np.median(patch, axis=0))
+                bgr = top[y0+m0:y0+CELL_SIZE_PX-m0, x0+m0:x0+CELL_SIZE_PX-m0]
+                cells.append((np.median(patch, axis=0),
+                              float((bgr.max(axis=2) >= 253).mean())))
+        if not cells:
+            return out
+        cells.sort(key=lambda t: t[0][2])          # V 오름차순
+        half = max(1, len(cells) // 2)
+        groups = [("어두운 칸", cells[:half]), ("밝은 칸", cells[half:])]
+
         out.append("  지금 화면의 빈 칸 색 (중앙값):")
-        bad = False
-        for key, vals in groups.items():
-            if not vals:
-                continue
-            v = np.median(np.array(vals), axis=0)
+        bad = clipped = False
+        light_sat = None
+        for key, items in groups:
+            v = np.median(np.array([c[0] for c in items]), axis=0)
+            clip = float(np.mean([c[1] for c in items])) * 100
             hits = []
             if PIECE_HSV_WHITE and self._in_ranges(v, PIECE_HSV_WHITE):
                 hits.append("흰쪽"); bad = True
             if PIECE_HSV_BLACK and self._in_ranges(v, PIECE_HSV_BLACK):
                 hits.append("검은쪽"); bad = True
             mark = f"❌ {'/'.join(hits)} 기물 범위 안!" if hits else "✅ 범위 밖"
-            out.append(f"    {key}  HSV=({v[0]:.0f},{v[1]:.0f},{v[2]:.0f})  {mark}")
-        if bad:
+            note = ""
+            if clip >= 2:
+                note = f"   ⚠️ 픽셀 {clip:.0f}% 가 255에 붙음(노출 과다)"
+                clipped = True
+            out.append(f"    {key}  HSV=({v[0]:.0f},{v[1]:.0f},{v[2]:.0f})  "
+                       f"{mark}{note}")
+            if key == "밝은 칸":
+                light_sat = float(v[1])
+        # ⚠️ 밝은 칸의 채도가 바닥이면, 그 칸은 '흰색'으로 찍히고 있는 것이다.
+        #    흰 기물과 같은 색이니 어떤 임계값으로도 못 가른다.
+        if light_sat is not None and light_sat < 25:
+            out += [
+                f"  ⚠️ 밝은 칸의 채도가 {light_sat:.0f} 밖에 안 됩니다 "
+                "(나무색이면 80 근처여야 합니다).",
+                "     지금 카메라는 밝은 칸을 **무채색 흰색**으로 찍고 있습니다.",
+                "     흰 기물과 색이 같으니 임계값을 어떻게 바꿔도 못 가릅니다.",
+                "     거의 항상 원인은 자동 화이트밸런스입니다 — AWB 는 화면 평균을",
+                "     무채색으로 맞추려 하는데, 이 판은 대부분이 베이지색이라",
+                "     그 색조를 통째로 상쇄해 버립니다.",
+                "     → 화이트밸런스와 노출을 고정하세요:",
+                f"         python vision/lock_camera.py --camera {self.camera_index}",
+            ]
+        if clipped:
+            out += [
+                "  → 노출 과다입니다. 감마로는 **절대** 못 고칩니다:",
+                "     255에 붙은 픽셀은 (255/255)^g = 255 라서 감마를 올려도 그대로입니다.",
+                "     센서 단계에서 이미 정보가 지워졌습니다.",
+                "     → 카메라 노출을 낮추세요:",
+                "         python vision/pick_pieces.py --camera 1   에서 - / = 키",
+                "       화면 위 clip 이 0% 가 될 때까지 낮춘 뒤 색을 다시 등록하세요.",
+            ]
+        elif bad:
             out += [
                 "  → 빈 칸이 기물로 읽히는 이유가 바로 이것입니다. 색 범위가 판 색까지",
                 "     덮고 있습니다. 다시 등록하세요 (판을 음성 표본으로 같이 모읍니다):",
                 "       python vision/pick_pieces.py --camera 1",
-                "       ] 로 감마를 2.0 근처까지 올리고 → b(빈 칸 자동수집)",
+                "       - / = 로 노출을 맞추고 → b(빈 칸 자동수집)",
                 "       → 1/2 로 기물 클릭 → s",
             ]
         return out
