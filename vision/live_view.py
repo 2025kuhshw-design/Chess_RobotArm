@@ -109,6 +109,11 @@ class DetectorProxy:
     def get_board_state(self):
         return self.det.get_board_state(self._borrow())
 
+    def piece_center(self, col, row, **kw):
+        # __getattr__ 로 넘기면 detector 가 카메라를 직접 읽어 프레임을 뺏는다.
+        # 라이브 뷰가 켜져 있을 땐 반드시 빌린 프레임을 넘겨야 한다.
+        return self.det.piece_center(col, row, frame=self._borrow(), **kw)
+
     def get_stable_board_state(self, tries: int = 6):
         return self.det.get_stable_board_state(tries, frame_src=self._borrow_fresh)
 

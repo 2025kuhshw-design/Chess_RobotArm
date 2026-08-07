@@ -206,12 +206,17 @@ def run_game(args, arm, detector, rl_model):
     aligner = None
     if detector is not None:
         from hardware.visual_align import align_over_square
-        def aligner(col, row, lift, suction):
+        def aligner(col, row, lift, suction, on_piece=False):
             # ⚠️ 반환값(보정 오프셋)을 반드시 그대로 돌려줄 것.
             #    여기서 삼켜버리면 execute_move 가 보정을 못 받아
             #    하강할 때 원래 칸 좌표로 되돌아간다(= 보정 무효).
+            # on_piece=True 면 칸 중심이 아니라 기물의 실제 중심을 목표로 삼는다.
+            # ⚠️ 팔이 그 칸 위로 내려가기 전에 재야 한다 — 내려가면 팔이 기물을
+            #    가려서 무게중심이 엉뚱하게 나온다. 지금은 아직 안전높이다.
+            target = detector.piece_center(col, row) if on_piece else None
             return align_over_square(arm, detector, col, row, lift,
-                                     suction=suction, corrector=corrector)
+                                     suction=suction, corrector=corrector,
+                                     target=target)
 
     print("\n" + "="*50)
     print("체스 게임 시작! 당신=WHITE / 로봇=BLACK")

@@ -472,7 +472,10 @@ class RealArm:
         # 도로 원위치로 돌아가, 카메라 보정이 사실상 무효였다.
         off = [0.0, 0.0]
 
-        def _align(col, row, suction=False):
+        def _align(col, row, suction=False, on_piece=False):
+            """on_piece=True 면 칸 중심이 아니라 **그 칸 기물의 실제 중심**에
+            맞춘다. 사람이 둔 기물은 칸 중심에서 몇 mm 씩 치우쳐 있어서,
+            칸 중심을 물면 기물 끝을 문다(기물 23~26mm vs 칸 29mm)."""
             off[0] = off[1] = 0.0
             if aligner is None:
                 return
@@ -480,6 +483,12 @@ class RealArm:
                 # ⚠️ 안전높이(4cm)가 아니라 **일할 높이**를 넘긴다.
                 #    높은 데서 재면 시차 때문에 한 칸 가까이 밀린 위치를
                 #    '맞다'고 판단하고, 내려가는 순간 어긋난다.
+                from hardware.visual_align import ALIGN_WORK_LIFT
+                r = aligner(col, row, ALIGN_WORK_LIFT, suction, on_piece)
+                if r is not None:
+                    off[0], off[1] = float(r[0]), float(r[1])
+            except TypeError:
+                # 예전 시그니처(on_piece 없음)의 콜백도 계속 동작하게
                 from hardware.visual_align import ALIGN_WORK_LIFT
                 r = aligner(col, row, ALIGN_WORK_LIFT, suction)
                 if r is not None:
@@ -528,7 +537,7 @@ class RealArm:
             """그 칸 기물을 집어 보드 밖 캡처 구역에 내려놓는다."""
             _move_to(col, row, lift=True)
             time.sleep(SETTLE_WAIT)
-            _align(col, row)                 # 카메라 보정 후 하강
+            _align(col, row, on_piece=True)  # 기물 실제 중심에 맞춘 뒤 하강
             _move_to(col, row, lift=False)
             time.sleep(SETTLE_WAIT)
             # 같은 자세 그대로 흡착만 켠다 (위치를 다시 계산하면 보정이 풀린다)
@@ -554,7 +563,7 @@ class RealArm:
             # 1) 출발 칸 위 안전 높이
             _move_to(fc, fr, lift=True)
             time.sleep(SETTLE_WAIT)          # 흔들림이 잦아든 뒤 하강
-            _align(fc, fr)                   # 카메라 보정
+            _align(fc, fr, on_piece=True)    # 기물 실제 중심에 맞춘다
             if not _ask("흡착컵이 집을 기물 바로 위인가요?"):
                 print("    건너뜀 — 기물을 손으로 옮겨주세요")
                 return False

@@ -1244,6 +1244,64 @@ class ChessBoardDetector:
     # ─────────────────────────────────────────
     # 메서드 4: 흡착컵 마커 위치 (시각 피드백 보정용)
     # ─────────────────────────────────────────
+    def piece_center(self, col: int, row: int, frame=None,
+                     max_dev: float = 0.40, min_frac: float = None):
+        """그 칸에 있는 **기물의 실제 중심**을 연속 칸 좌표로 돌려준다.
+
+        왜 필요한가:
+          정렬은 흡착컵을 '칸 중심'에 맞춘다. 그런데 사람이 둔 기물은 칸
+          중심에 정확히 있지 않다 — 몇 mm 씩 치우쳐 있다. 기물이 23~26mm,
+          칸이 29mm 라 5mm 만 치우쳐도 흡착컵이 기물 끝을 문다.
+          기물을 직접 보고 그 중심을 목표로 삼으면 이 오차가 사라진다.
+
+        ⚠️ 기물이 판 위에 붙어 있어(높이 4~5mm) 시차가 거의 없다. 그래서
+           마커(25mm 높이)와 달리 별도 보정 없이 그대로 쓸 수 있다.
+        ⚠️ 팔이 그 칸 위에 있으면 기물을 가린다. **팔을 옮기기 전에**
+           불러야 한다.
+
+        max_dev : 칸 중심에서 이보다 멀면 옆 칸 기물을 잡은 것으로 보고 버린다
+        반환    : (col_f, row_f) 연속 좌표. 못 찾으면 None.
+        """
+        if not (PIECE_HSV_WHITE or PIECE_HSV_BLACK):
+            return None
+        if frame is None:
+            ok, frame = self.cap.read()
+            if not ok:
+                return None
+        top = self._get_top_view(frame)
+        hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
+        k = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(
+            self._color_mask(hsv, list(PIECE_HSV_WHITE) + list(PIECE_HSV_BLACK)),
+            cv2.MORPH_OPEN, k)
+
+        gx, gy = chess_to_grid(col, row)
+        x0, y0 = cell_px(gx, gy)
+        sub = mask[y0:y0 + CELL_SIZE_PX, x0:x0 + CELL_SIZE_PX]
+        thr = PIECE_COLOR_MIN_FRAC if min_frac is None else min_frac
+        if (sub > 0).mean() < thr:
+            return None                     # 그 칸에 기물이 없다
+
+        # 칸 안에서 가장 큰 덩어리 하나만 — 옆 칸 기물이 걸쳐 들어오면
+        # 무게중심이 그쪽으로 끌려간다.
+        cnts, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        best = max(cnts, key=cv2.contourArea)
+        M = cv2.moments(best)
+        if M["m00"] == 0:
+            return None
+        cx = x0 + M["m10"] / M["m00"]
+        cy = y0 + M["m01"] / M["m00"]
+        # ⚠️ px_to_grid_uv 는 이미 '칸 중심이 gx+0.5' 인 연속 좌표를 준다.
+        #    grid_uv_to_colrow 가 그 규약을 그대로 받으므로 여기서 0.5 를
+        #    또 더하면 안 된다(반 칸씩 밀려서 전부 max_dev 에 걸린다).
+        u, v = px_to_grid_uv(cx, cy)
+        cf, rf = grid_uv_to_colrow(u, v)
+        if math.hypot(cf - col, rf - row) > max_dev:
+            return None                     # 너무 멀다 — 잘못 잡은 것
+        return (cf, rf)
+
     def margin_report(self, frame=None) -> str:
         """판 **바깥 여유 영역**이 탑뷰에서 검게 나오는지 잰다.
 

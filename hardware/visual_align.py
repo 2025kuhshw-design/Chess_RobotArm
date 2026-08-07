@@ -25,7 +25,12 @@ from utils.ik_solver import (inverse_kinematics, chess_square_to_xyz,
 # 허용 오차 (칸 단위). 0.0343칸 ≈ 1.0mm.
 ALIGN_TOL_CELLS = 0.0343
 # 최대 반복 횟수. 유격 때문에 완전히 수렴하지 않을 수 있으므로 상한을 둔다.
-ALIGN_MAX_ITER = 4
+# ⚠️ 상한이 있는 이유는 '무한 반복 방지'다. 관절 유격은 매번 방향이 달라서
+#    아무리 반복해도 허용치 안으로 안 들어오는 자세가 있고, 그때 계속 돌면
+#    영영 안 끝난다. 그래서 상한에 걸리면 **지금까지 잰 것 중 가장 좋았던
+#    위치로 돌아가서** 내려간다(예전에는 마지막 위치 그대로 내려갔는데,
+#    그게 가장 나쁜 시도일 수도 있었다).
+ALIGN_MAX_ITER = 6
 # 보정 이득. 1.0이면 측정 오차만큼 그대로 되돌린다. 진동하면 0.6~0.8로 낮춘다.
 ALIGN_GAIN = 0.8
 # 측정 오차가 이보다 크면 '마커를 잘못 잡은 것'으로 보고 보정하지 않는다.
@@ -71,7 +76,8 @@ def align_over_square(arm, detector, col: int, row: int,
                       tol=ALIGN_TOL_CELLS, max_iter=ALIGN_MAX_ITER,
                       gain=ALIGN_GAIN, verbose=True, view_cb=None,
                       suction: bool = False, corrector=None,
-                      clear_lift: float = ALIGN_CLEAR_LIFT) -> tuple:
+                      clear_lift: float = ALIGN_CLEAR_LIFT,
+                      target=None) -> tuple:
     """목표 칸 위에서 카메라를 보며 흡착컵을 정렬한다.
 
     동작 (한 번 반복):
@@ -96,6 +102,9 @@ def align_over_square(arm, detector, col: int, row: int,
                흡착이 풀려 기물을 떨어뜨린다.
     corrector: f(x,y,z)->Δq (RL 보정). execute_move 가 쓰는 것과 **같은** 것을
                넘겨야 정렬할 때와 하강할 때의 자세가 어긋나지 않는다.
+    target   : (col_f, row_f) 연속 좌표. 주면 칸 중심 대신 **여기**에 맞춘다.
+               기물을 집을 때 detector.piece_center() 로 잰 기물 실제 중심을
+               넘기면, 사람이 삐뚤게 둔 기물도 정중앙을 문다.
 
     반환: (dcol, drow) — 칸 단위 보정 오프셋. 호출한 쪽은 이후 하강에도
           **반드시 이 값을 적용**해야 한다(안 그러면 보정이 통째로 사라진다).
@@ -104,8 +113,18 @@ def align_over_square(arm, detector, col: int, row: int,
     import time
     import hardware.arm_controller as ac
 
+    tcol, trow = (float(col), float(row)) if target is None \
+        else (float(target[0]), float(target[1]))
+    if target is not None and verbose:
+        d = math.hypot(tcol - col, trow - row) * CELL_SIZE * 1000
+        print(f"    [정렬] 목표 = 기물 실제 중심 "
+              f"(칸 중심에서 {d:.1f}mm 치우침)")
+
     dcol, drow = 0.0, 0.0
     last_err = None
+    # 지금까지 가장 좋았던 (오차, 오프셋). 상한에 걸리거나 중단할 때
+    # 마지막 시도가 아니라 이 위치로 돌아가서 내려간다.
+    best = None
 
     def goto(dc, dr, z_lift):
         """오프셋 (dc,dr) 위치의 z_lift 높이로 이동."""
@@ -117,6 +136,28 @@ def align_over_square(arm, detector, col: int, row: int,
             if d is not None:
                 q = [q[i] + d[i] for i in range(3)]
         arm.move(*q, suction=suction)
+
+    def finish(reason=""):
+        """가장 좋았던 오프셋으로 돌아가 측정 높이에 내려두고 그 값을 돌려준다.
+
+        ⚠️ 지금 팔이 있는 자리가 최선이 아닐 수 있다(직전 시도가 더 나빴던
+           경우). 옆으로 옮길 때는 반드시 clear_lift 로 올라갔다 가야 옆
+           기물을 안 민다.
+        """
+        if best is None:
+            return (dcol, drow)
+        berr, bc, br = best
+        if abs(bc - dcol) > 1e-6 or abs(br - drow) > 1e-6:
+            if verbose:
+                print(f"    [정렬] 가장 좋았던 위치로 되돌림 "
+                      f"({berr*CELL_SIZE*1000:.1f}mm){reason}")
+            try:
+                goto(dcol, drow, clear_lift)
+                goto(bc, br, clear_lift)
+                goto(bc, br, lift)
+            except ValueError:
+                return (dcol, drow)
+        return (bc, br)
 
     for i in range(max_iter):
         # ── 측정 높이로 하강 ──
@@ -138,8 +179,8 @@ def align_over_square(arm, detector, col: int, row: int,
                 print("      · 마커 색: python vision/pick_marker.py")
             return (dcol, drow)
 
-        err_col = mk[0] - col
-        err_row = mk[1] - row
+        err_col = mk[0] - tcol
+        err_row = mk[1] - trow
         err = math.hypot(err_col, err_row)
         if verbose:
             print(f"    [정렬 {i+1}] 오차 {err*CELL_SIZE*1000:5.1f}mm "
@@ -147,7 +188,7 @@ def align_over_square(arm, detector, col: int, row: int,
 
         if err <= tol:
             if verbose:
-                print(f"    [정렬] 허용치({tol*CELL_SIZE*1000:.0f}mm) 안 — 완료")
+                print(f"    [정렬] 허용치({tol*CELL_SIZE*1000:.1f}mm) 안 — 완료")
             return (dcol, drow)
 
         if err > ALIGN_MAX_ERR_CELLS:
@@ -156,12 +197,15 @@ def align_over_square(arm, detector, col: int, row: int,
                       f"(한도 {ALIGN_MAX_ERR_CELLS*CELL_SIZE*1000:.0f}mm)")
                 print("      → 흡착컵이 아닌 다른 물체를 마커로 잡은 것으로 보입니다.")
                 print("      → 보정하지 않고 진행합니다.")
-            return (dcol, drow)
+            return finish()
+
+        if best is None or err < best[0]:
+            best = (err, dcol, drow)
 
         if last_err is not None and err > last_err * 1.2:
             if verbose:
                 print("    [정렬] 오차가 커짐 — 중단 (ALIGN_GAIN을 낮춰 보세요)")
-            return (dcol, drow)
+            return finish(" — 발산")
         last_err = err
 
         new_dcol = dcol - gain * err_col
@@ -181,12 +225,17 @@ def align_over_square(arm, detector, col: int, row: int,
         if view_cb is not None:
             view_cb()
 
-    # 반복을 다 썼으면 마지막 오프셋으로 측정 높이에 내려둔다
+    # 반복을 다 썼다 — 마지막 시도가 아니라 **가장 좋았던** 위치로 내려간다.
+    if verbose:
+        b = f"{best[0]*CELL_SIZE*1000:.1f}mm" if best else "?"
+        print(f"    [정렬] {max_iter}회 반복해도 허용치"
+              f"({tol*CELL_SIZE*1000:.1f}mm) 안에 못 들어왔습니다 "
+              f"— 가장 좋았던 {b} 위치로 진행")
+        print("      (유격 탓에 수렴 안 되는 자세가 있습니다. 이 상태로도"
+              " 기물은 대개 물립니다)")
+    out = finish()
     try:
-        goto(dcol, drow, lift)
+        goto(out[0], out[1], lift)
     except ValueError:
         pass
-    if verbose:
-        print(f"    [정렬] {max_iter}회 반복 후에도 허용치 미달 — "
-              f"현재 보정({dcol:+.2f}, {drow:+.2f}칸)으로 진행")
-    return (dcol, drow)
+    return out

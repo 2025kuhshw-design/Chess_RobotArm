@@ -147,24 +147,30 @@ def main():
 
     show = show_once
 
-    def align(sq, suction=False):
+    def align(sq, suction=False, on_piece=False):
         """카메라가 있으면 하강 전에 정렬(하며 매 반복마다 화면 갱신).
         ⚠️ 기물을 들고 있으면 suction=True — 안 넘기면 정렬 중 떨어뜨린다."""
         if detector is None:
             return
         from hardware.visual_align import ALIGN_WORK_LIFT
+        target = det_src.piece_center(sq[0], sq[1]) if on_piece else None
         align_over_square(arm, det_src, sq[0], sq[1], ALIGN_WORK_LIFT,
-                          view_cb=show_once, suction=suction)
+                          view_cb=show_once, suction=suction, target=target)
         show_once()
 
-    def aligner_cb(col, row, lift, suction):
+    def aligner_cb(col, row, lift, suction, on_piece=False):
         """execute_move가 하강 직전마다 부르는 콜백.
         ⚠️ 정렬이 돌려준 보정 오프셋을 그대로 반환해야 한다. 삼키면
-           execute_move 가 하강할 때 원래 칸 좌표로 되돌아간다."""
+           execute_move 가 하강할 때 원래 칸 좌표로 되돌아간다.
+        on_piece=True 면 칸 중심이 아니라 기물의 실제 중심을 목표로 삼는다.
+        ⚠️ 팔이 아직 안전높이에 있을 때 재야 한다 — 내려간 뒤엔 팔이 기물을
+           가려서 무게중심이 엉뚱하게 나온다."""
         if detector is None:
             return None
+        target = det_src.piece_center(col, row) if on_piece else None
         off = align_over_square(arm, det_src, col, row, lift,
-                                view_cb=show_once, suction=suction)
+                                view_cb=show_once, suction=suction,
+                                target=target)
         show_once()
         return off
 
@@ -318,7 +324,7 @@ def main():
                 print(f"  {p[1]} 칸 위로 이동 — 하강 전 확인 단계")
                 goto(*sq, lift=True)
                 time.sleep(ac.SETTLE_WAIT)
-                align(sq)
+                align(sq, on_piece=True)   # 기물 실제 중심에 맞춘다
                 if not args.no_confirm:
                     # 칸 위에 멈춰서 흡착컵이 기물 바로 위에 있는지 눈/카메라로 확인
                     ans = input("    흡착컵이 기물 바로 위인가요? "
