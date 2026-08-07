@@ -44,7 +44,16 @@
   (255/255)^g = 255 이라 아무리 어둡게 해도 그대로 255다.
 
 화면에서 흰쪽은 초록, 검은쪽은 파랑으로 칠해진다.
-**기물 윗면만** 칠해지고 판은 안 칠해지면 성공. 아래 줄이 16/16 이면 완성.
+
+아래 줄을 볼 때 주의 — 두 가지 숫자가 다른 뜻이다:
+  `mask hits w=17 b=16`  색깔별로 **따로** 센 것. 겹치는 칸이 두 번 잡힌다.
+                         기물 옆면이 흰 종이면 파란 기물 테두리가 흰쪽으로도
+                         잡혀서 17이 된다. **이건 문제가 아니다.**
+  `VERDICT white=16 black=16 empty=32`  ← **이게 진짜 판정 결과다.**
+                         실제 인식은 '비율이 큰 쪽이 이긴다'라서, 테두리만
+                         걸친 칸은 제대로 검은쪽으로 간다. 16/16/32 면 완성.
+  `ambiguous N`          두 색 비율이 비슷해서 조명이 조금만 흔들려도 뒤집힐
+                         수 있는 칸 수. 0이어야 안심할 수 있다.
 
 ⚠️ 감마를 바꿔서 저장했다면 빈 판 기준 영상도 다시 찍어야 한다:
      python vision/check_board.py --camera 1 --capture-empty
@@ -306,6 +315,8 @@ def main():
                         fitted[key] = fit_range(samples[key], samples["n"])
 
             counts = {}
+            frac = {}
+            m0 = int(CELL_SIZE_PX * 0.2)
             for key, color in (("w", (0, 255, 0)), ("b", (255, 80, 0))):
                 if key not in fitted:
                     continue
@@ -314,17 +325,35 @@ def main():
                     cv2.inRange(hsv, np.array(lo), np.array(hi)),
                     cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
                 disp[mask > 0] = color
-                # 기물이 있다고 판정될 칸 수
-                m0 = int(CELL_SIZE_PX * 0.2)
-                n = 0
+                f = np.zeros((8, 8), np.float32)
                 for gy in range(8):
                     for gx in range(8):
                         _x0, _y0 = cell_px(gx, gy)
-                        sl = (slice(_y0+m0, _y0+CELL_SIZE_PX-m0),
-                              slice(_x0+m0, _x0+CELL_SIZE_PX-m0))
-                        if (mask[sl] > 0).mean() >= PIECE_COLOR_MIN_FRAC:
-                            n += 1
-                counts[key] = n
+                        f[gy, gx] = (mask[_y0+m0:_y0+CELL_SIZE_PX-m0,
+                                          _x0+m0:_x0+CELL_SIZE_PX-m0] > 0).mean()
+                frac[key] = f
+                counts[key] = int((f >= PIECE_COLOR_MIN_FRAC).sum())
+
+            # ⚠️ 위의 counts 는 색깔별로 **따로** 센 것이라 겹치는 칸이 두 번
+            #    잡힌다. 기물 옆면이 흰 종이면 파란 기물 테두리가 흰쪽으로도
+            #    잡혀서 white=17 처럼 보인다 — 그런데 실제 판정은
+            #    '비율이 큰 쪽이 이긴다'라서 그 칸은 검은쪽으로 제대로 간다.
+            #    그래서 **실제 판정 결과**를 따로 세서 같이 보여준다. 이게 진짜다.
+            verdict = {"white": 0, "black": 0, "empty": 0}
+            ambiguous = 0
+            if "w" in frac and "b" in frac:
+                fw, fb = frac["w"], frac["b"]
+                for gy in range(8):
+                    for gx in range(8):
+                        w, b = float(fw[gy, gx]), float(fb[gy, gx])
+                        if max(w, b) < PIECE_COLOR_MIN_FRAC:
+                            verdict["empty"] += 1
+                            continue
+                        verdict["white" if w >= b else "black"] += 1
+                        # 두 색이 비슷하면 조명이 조금만 흔들려도 뒤집힌다
+                        if min(w, b) >= PIECE_COLOR_MIN_FRAC and \
+                           min(w, b) > 0.5 * max(w, b):
+                            ambiguous += 1
 
             for i in range(1, 8):     # 격자선 (판 영역 안에만)
                 gx0, gy0 = cell_px(i, i)
@@ -352,12 +381,17 @@ def main():
                             (5, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                             (0, 0, 255), 2)
             leak = sum(f[3] for f in fitted.values())
-            txt = (f"cells  white={counts.get('w','-')}  black={counts.get('b','-')}"
-                   f"  (16 each = OK)")
+            txt = (f"mask hits  w={counts.get('w','-')} b={counts.get('b','-')}"
+                   f"   VERDICT  white={verdict['white']} black={verdict['black']} "
+                   f"empty={verdict['empty']}  (16/16/32 = OK)")
+            if ambiguous:
+                txt += f"  ambiguous {ambiguous}"
             if leak:
                 txt += f"  !! board leak {leak}"
+            good = (verdict["white"], verdict["black"]) == (16, 16) and not ambiguous
             cv2.putText(disp, txt, (5, disp.shape[0]-8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40,
+                        (0, 180, 0) if good else (0, 0, 255), 1)
 
             cv2.imshow(WIN, disp)
             k = cv2.waitKey(30) & 0xFF
